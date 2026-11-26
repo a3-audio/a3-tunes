@@ -263,3 +263,18 @@ TEST (Rewrite, RewriteRegeneratesTagsAndChapters)
     EXPECT_NEAR (format->chapters[1]->start * av_q2d (format->chapters[1]->time_base), 0.1, 1e-6);
     EXPECT_LE (format->chapters[1]->end * av_q2d (format->chapters[1]->time_base), (double) frames / rate + 1e-9);
 }
+
+TEST (Rewrite, MoreEventsThanTheCapLeaveTheFileUntouched)
+{
+    TempDir t;
+    const auto r = written (t);
+    auto data = dataOf (r.output);
+    for (int i = 0; i <= maxEvents; ++i)
+    {
+        Event e;
+        e.type = EventType::resetpos;
+        e.beat = i;
+        data.events.push_back (e);
+    }
+    expectRefusedAndUntouched (r.output, data, "513 events");
+}

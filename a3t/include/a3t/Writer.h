@@ -37,7 +37,7 @@ namespace a3t
     };
 
     // Writes a unique temporary beside output, verifies it, then renames it over output; on any failure
-    // output is untouched and the temporary is gone.
+    // output is untouched and the temporary is gone. More than maxEvents events are refused (so is a rewrite).
     WriteResult writeTrack (const WriteRequest&);
 
     // Replaces the a3t.json attachment (and the tags and chapters derived from it) of an existing .a3mkv.

@@ -529,3 +529,36 @@ TEST (Writer, AacAndMp2OriginalsAreStillKept)
         EXPECT_TRUE (result.ok) << name << ": " << result.error;
     }
 }
+
+namespace
+{
+    std::vector<Event> resetposEvents (int count, int stem = 0)
+    {
+        std::vector<Event> events;
+        for (int i = 0; i < count; ++i)
+        {
+            Event e;
+            e.type = EventType::resetpos;
+            e.stem = stem;
+            e.beat = i;
+            events.push_back (e);
+        }
+        return events;
+    }
+}
+
+// A file must read back as written: the reader keeps maxEvents, so more are refused up front.
+TEST (Writer, MoreEventsThanTheCapAreRefused)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.data.events = resetposEvents (maxEvents + 1);
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.contains ("513 events; the cap is 512")) << result.error;
+    EXPECT_FALSE (r.output.exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+
+    r.data.events = resetposEvents (maxEvents);
+    EXPECT_TRUE (writeTrack (r).ok);
+}

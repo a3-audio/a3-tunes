@@ -484,3 +484,55 @@ TEST (Cli, HugeFiniteValuesSurviveBuildAndInfo)
     ASSERT_EQ (shown.data.events.size(), 1u);
     EXPECT_EQ (shown.data.events[0].azimuth, 1e305);
 }
+
+namespace
+{
+    // `count` resetpos events on one stem, beats 0, 1, 2, ... as a JSON array.
+    juce::String resetposJson (int count, int stem)
+    {
+        juce::StringArray items;
+        for (int i = 0; i < count; ++i)
+            items.add (R"({"type":"resetpos","stem":)" + juce::String (stem) + R"(,"beat":)" + juce::String (i) + "}");
+        return "[" + items.joinIntoString (",") + "]";
+    }
+}
+
+TEST (Cli, BuildRefusesMoreEventsThanTheCap)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto args = buildArgs (t, out);
+    args.set (args.indexOf ("--meta") + 1, path (writeMeta (t, R"({"events":)" + resetposJson (maxEvents + 1, 0) + "}")));
+    const auto r = run (t, args);
+    EXPECT_EQ (r.exitCode, 2);
+    EXPECT_TRUE (r.err.contains ("513")) << r.err;
+    EXPECT_FALSE (out.exists());
+}
+
+// The rig dropped 100 of the laptop's 500 events and added 112; taking only the additions gives 612.
+TEST (Cli, MergeThatWouldExceedTheEventCapWritesNothing)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto args = buildArgs (t, out);
+    args.set (args.indexOf ("--meta") + 1, path (writeMeta (t, R"({"events":)" + resetposJson (500, 0) + "}")));
+    ASSERT_EQ (run (t, args).exitCode, 0);
+    const auto side = sidecarFileFor (out);
+    side.replaceWithText (R"({"version":2,"based_on":{"uuid":")" + openTrack (out).data.uuid
+                          + R"(","revision":1},"events":)" + resetposJson (400, 0).dropLastCharacters (1) + ","
+                          + resetposJson (112, 1).substring (1) + "}");
+    juce::StringArray added;
+    for (const auto& line : juce::StringArray::fromLines (run (t, { "merge", path (out), "--list" }).out))
+        if (line.contains ("\tadded\t"))
+            added.add (line.upToFirstOccurrenceOf ("\t", false, false));
+    ASSERT_EQ (added.size(), 112);
+
+    const auto fileBefore = bytesOf (out);
+    const auto sideBefore = bytesOf (side);
+    const auto r = run (t, { "merge", path (out), "--take", added.joinIntoString (",") });
+    EXPECT_EQ (r.exitCode, 2) << r.err;
+    EXPECT_TRUE (r.err.contains ("612 events")) << r.err;
+    EXPECT_EQ (bytesOf (out), fileBefore);
+    ASSERT_TRUE (side.existsAsFile());
+    EXPECT_EQ (bytesOf (side), sideBefore);
+}

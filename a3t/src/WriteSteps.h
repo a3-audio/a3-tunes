@@ -58,6 +58,7 @@ juce::String lossyCopyAdvice (const juce::String& codec, juce::int64 copiedFrame
 // The five sources, a3t.json from `data`, the other attachments, and the tags and chapters derived from
 // `data`, into `temporary`; then the verification (every track `frames` long at `rate`, a3t.json exactly
 // as serialised) and the rename over `target`. `copiedCodec`: the original was packet-copied from that codec.
+// More than maxEvents events are refused before anything is written.
 WriteResult writeVerified (TemporaryFile& temporary, const juce::File& target, Sources&, const A3tData& data,
                            const std::vector<Attachment>& attachments, juce::int64 frames, int rate,
                            const std::optional<juce::String>& copiedCodec);

@@ -167,6 +167,12 @@ namespace
             error = "the meta file is not a JSON object";
             return false;
         }
+        // parse would keep the first maxEvents and drop the rest without a word.
+        if (const auto* events = object->getProperty ("events").getArray(); events != nullptr && events->size() > a3t::maxEvents)
+        {
+            error = "the meta file has " + juce::String (events->size()) + " events; the cap is " + juce::String (a3t::maxEvents);
+            return false;
+        }
         if (! object->hasProperty ("version"))
             object->setProperty ("version", a3t::formatVersion);
         const auto loaded = a3t::parse (juce::JSON::toString (json));

@@ -247,6 +247,9 @@ WriteResult writeVerified (TemporaryFile& temporary, const juce::File& target, S
                            const std::vector<Attachment>& attachments, juce::int64 frames, int rate,
                            const std::optional<juce::String>& copiedCodec)
 {
+    // A reader keeps maxEvents; more would be written, verified against the same text, and cut on the next read.
+    if (data.events.size() > (size_t) maxEvents)
+        return failure (juce::String ((juce::int64) data.events.size()) + " events; the cap is " + juce::String (maxEvents));
     if (const auto error = writeFile (temporary.path(), sources, data, attachments, (double) frames / rate);
         error.isNotEmpty())
         return failure (error);
