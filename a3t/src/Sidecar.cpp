@@ -11,8 +11,6 @@ namespace a3t
             "version", "based_on", "events", "cues", "loops", "phrases", "analysis", "track", "stems" };
         const juce::String trackSuffix = ".a3mkv";
 
-        bool isNumber (const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
-
         // ---- reading ----
 
         template <typename T, typename FromVar>
@@ -47,8 +45,7 @@ namespace a3t
         {
             if (basedOn["uuid"].isString())
                 s.basedOnUuid = basedOn["uuid"].toString();
-            if (isNumber (basedOn["revision"]))
-                s.basedOnRevision = static_cast<int> (basedOn["revision"]);
+            s.basedOnRevision = intOr (basedOn["revision"], 0);
         }
 
         juce::var parseObject (const juce::File& file)

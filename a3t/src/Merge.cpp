@@ -190,22 +190,29 @@ namespace a3t
 
         // ---- track fields ----
 
-        bool isNumber (const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
-
-        bool sameValue (const juce::var& a, const juce::var& b)
+        // The rig's value as the file would hold it once taken (clamped, quantised, typed): what the
+        // merge compares, shows and writes, so the three cannot disagree.
+        juce::var normalisedField (const TrackInfo& laptop, const juce::Identifier& name, const juce::var& value)
         {
-            if (isNumber (a) && isNumber (b))
-                return static_cast<double> (a) == static_cast<double> (b);
-            return text (a) == text (b);
+            const auto v = trackToVar (laptop);
+            v.getDynamicObject()->setProperty (name, value);
+            return trackToVar (trackFromVar (v)).getProperty (name, {});
+        }
+
+        // playCount only grows: the rig's value when it is larger, else nothing.
+        std::optional<int> largerPlayCount (const TrackInfo& laptop, const juce::var& rigValue)
+        {
+            const auto theirs = static_cast<int> (normalisedField (laptop, playCountField, rigValue));
+            return theirs > laptop.playCount ? std::optional<int> (theirs) : std::nullopt;
         }
 
         void diffPlayCount (const A3tData& laptop, const juce::var& rigValue, std::vector<Change>& out)
         {
-            const int mine = laptop.track.playCount;
-            if (! isNumber (rigValue) || static_cast<int> (rigValue) <= mine)   // a no-op is no difference
+            const auto theirs = largerPlayCount (laptop.track, rigValue);
+            if (! theirs)   // a no-op is no difference
                 return;
             auto c = makeChange (Section::trackField, Kind::changed, trackFieldKey (playCountField),
-                                 juce::String (mine), juce::String (static_cast<int> (rigValue)));
+                                 juce::String (laptop.track.playCount), juce::String (*theirs));
             c.automatic = true;
             out.push_back (c);
         }
@@ -222,10 +229,11 @@ namespace a3t
                     continue;
                 }
                 const auto before = mine.getProperty (field.name, {});
+                const auto after = normalisedField (laptop.track, field.name, field.value);
                 if (before.isVoid())
-                    out.push_back (makeChange (Section::trackField, Kind::added, trackFieldKey (name), {}, text (field.value)));
-                else if (! sameValue (before, field.value))
-                    out.push_back (makeChange (Section::trackField, Kind::changed, trackFieldKey (name), text (before), text (field.value)));
+                    out.push_back (makeChange (Section::trackField, Kind::added, trackFieldKey (name), {}, text (after)));
+                else if (text (before) != text (after))
+                    out.push_back (makeChange (Section::trackField, Kind::changed, trackFieldKey (name), text (before), text (after)));
             }
         }
 
@@ -238,11 +246,11 @@ namespace a3t
                 const auto name = field.name.toString();
                 if (name == playCountField)   // automatic: the larger value, whatever was chosen
                 {
-                    if (isNumber (field.value) && static_cast<int> (field.value) > laptop.track.playCount)
-                        out.set (field.name, field.value);
+                    if (const auto theirs = largerPlayCount (laptop.track, field.value))
+                        out.set (field.name, *theirs);
                 }
                 else if (taken.count (trackFieldKey (name)) > 0)
-                    out.set (field.name, field.value);
+                    out.set (field.name, normalisedField (laptop.track, field.name, field.value));
             }
             return out;
         }

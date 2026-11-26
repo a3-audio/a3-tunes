@@ -33,6 +33,9 @@ namespace a3t
     juce::var stemsToVar (const std::array<StemLabel, numStems>&);
     std::array<StemLabel, numStems> stemsFromVar (const juce::var&);   // missing entries stay empty
 
+    // A finite number clamped into int (a cast of 1e300 is undefined); `fallback` for anything else.
+    int intOr (const juce::var&, int fallback);
+
     // The keys of an object that are not in `known` (void when none), and the way back:
     // each one is set on `target` unless it already has that key.
     juce::var unknownKeys (const juce::var& object, const juce::StringArray& known);

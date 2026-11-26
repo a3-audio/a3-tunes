@@ -19,7 +19,9 @@ namespace a3t
         // "loop:3", "loop:in:61.000000", "phrase:96.000000", "trackField:rating",
         // "grid", "analysis:bpm", "analysis:key", "analysis:loudness", "stems" (all four labels, one item).
         juce::String key;
-        juce::String laptop, rig;   // compact JSON of the item; empty when absent
+        // Compact JSON of the item; empty when absent. A track field shows the rig's value as the file
+        // would hold it (clamped, quantised, typed): what is shown is what applyChanges writes.
+        juce::String laptop, rig;
         bool automatic = false;     // playCount: the larger value wins, nobody chooses
     };
 

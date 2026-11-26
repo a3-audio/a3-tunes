@@ -504,3 +504,51 @@ TEST (Merge, StemsAreOneItem)
     EXPECT_EQ (taken.stems[0].label, "Kick");
     EXPECT_EQ (taken.stems[2].colour, "#00ff00");
 }
+
+// What the merge shows for a track field is what it would write: the rig's value as the reader takes it.
+TEST (Merge, WrongTypedTrackFieldShowsWhatWouldBeWritten)
+{
+    const auto laptop = laptopData();   // rating 3
+    auto rig = sidecarFor (laptop);
+    rig.trackFields.set ("rating", "abc");
+    const auto changes = diff (laptop, rig);
+    ASSERT_EQ (changes.size(), 1u);
+    EXPECT_EQ (changes[0].key, "trackField:rating");
+    EXPECT_EQ (changes[0].laptop, "3");
+    EXPECT_EQ (changes[0].rig, "0");
+    EXPECT_EQ (applyChanges (laptop, rig, { "trackField:rating" }).track.rating, 0);
+}
+
+TEST (Merge, RatingNineAgainstFiveIsNoChange)
+{
+    auto laptop = laptopData();
+    laptop.track.rating = 5;
+    auto rig = sidecarFor (laptop);
+    rig.trackFields.set ("rating", 9);
+    EXPECT_TRUE (diff (laptop, rig).empty());
+}
+
+TEST (Merge, GainDbBelowANanosecondIsNoChange)
+{
+    auto laptop = laptopData();
+    laptop.track.gainDb = 1.0;
+    auto rig = sidecarFor (laptop);
+    rig.trackFields.set ("gainDb", 1.0 + 1e-12);
+    EXPECT_TRUE (diff (laptop, rig).empty());
+}
+
+TEST (Merge, HugePlayCountIsClampedNotUB)
+{
+    const auto laptop = laptopData();   // playCount 10
+    auto rig = sidecarFor (laptop);
+    rig.trackFields.set ("playCount", 1e300);
+    const auto changes = diff (laptop, rig);
+    ASSERT_EQ (changes.size(), 1u);
+    EXPECT_TRUE (changes[0].automatic);
+    EXPECT_EQ (changes[0].rig, "2147483647");
+    EXPECT_EQ (applyChanges (laptop, rig, {}).track.playCount, 2147483647);
+
+    rig.trackFields.set ("playCount", -1e300);
+    EXPECT_TRUE (diff (laptop, rig).empty());
+    EXPECT_EQ (applyChanges (laptop, rig, {}).track.playCount, 10);
+}

@@ -382,3 +382,13 @@ TEST (Sidecar, ChangedSidecarIsNotDeleted)
     EXPECT_TRUE (deleteSidecarIfUnchanged (file, now));
     EXPECT_FALSE (file.exists());
 }
+
+TEST (Sidecar, HugeBasedOnRevisionIsClamped)
+{
+    TempFolder tmp;
+    const auto file = tmp.dir.getChildFile ("t.a3events.json");
+    ASSERT_TRUE (file.replaceWithText (R"({"version":2,"based_on":{"uuid":"u","revision":1e300},"events":[]})"));
+    EXPECT_EQ (loadSidecar (file).sidecar.basedOnRevision, 2147483647);
+    ASSERT_TRUE (file.replaceWithText (R"({"version":2,"based_on":{"uuid":"u","revision":-1e300},"events":[]})"));
+    EXPECT_EQ (loadSidecar (file).sidecar.basedOnRevision, -2147483647 - 1);
+}

@@ -23,13 +23,6 @@ namespace a3t
             return isFiniteNumber (v) ? quantised (static_cast<double> (v)) : fallback;
         }
 
-        int intOr (const juce::var& v, int fallback)
-        {
-            if (! isFiniteNumber (v))
-                return fallback;
-            return static_cast<int> (std::clamp (static_cast<double> (v), -2147483648.0, 2147483647.0));
-        }
-
         bool boolOr (const juce::var& v, bool fallback) { return v.isBool() ? static_cast<bool> (v) : fallback; }
 
         juce::String stringOr (const juce::var& v) { return v.isString() ? v.toString() : juce::String(); }
@@ -434,6 +427,13 @@ namespace a3t
             d.extra = unknownKeys (v, knownTopKeys);
             return d;
         }
+    }
+
+    int intOr (const juce::var& v, int fallback)
+    {
+        if (! isFiniteNumber (v))
+            return fallback;
+        return static_cast<int> (std::clamp (static_cast<double> (v), -2147483648.0, 2147483647.0));
     }
 
     juce::var unknownKeys (const juce::var& obj, const juce::StringArray& known)
