@@ -20,12 +20,14 @@ namespace a3t
 
         double numberOr (const juce::var& v, double fallback)
         {
-            return isFiniteNumber (v) ? static_cast<double> (v) : fallback;
+            return isFiniteNumber (v) ? quantised (static_cast<double> (v)) : fallback;
         }
 
         int intOr (const juce::var& v, int fallback)
         {
-            return isFiniteNumber (v) ? static_cast<int> (static_cast<double> (v)) : fallback;
+            if (! isFiniteNumber (v))
+                return fallback;
+            return static_cast<int> (std::clamp (static_cast<double> (v), -2147483648.0, 2147483647.0));
         }
 
         bool boolOr (const juce::var& v, bool fallback) { return v.isBool() ? static_cast<bool> (v) : fallback; }
@@ -85,7 +87,7 @@ namespace a3t
             o->setProperty ("bitrate", a.bitrate);
             o->setProperty ("codec", a.codec);
             o->setProperty ("source", a.source);
-            o->setProperty ("lengthSeconds", a.lengthSeconds);
+            o->setProperty ("lengthSeconds", quantised (a.lengthSeconds));
             return makeObject (o);
         }
 
@@ -95,7 +97,7 @@ namespace a3t
             a.sampleRate = intOr (v["sampleRate"], 0);
             a.bitDepth = intOr (v["bitDepth"], 0);
             a.channels = intOr (v["channels"], 0);
-            a.bitrate = static_cast<juce::int64> (numberOr (v["bitrate"], 0.0));
+            a.bitrate = static_cast<juce::int64> (std::clamp (numberOr (v["bitrate"], 0.0), -9e18, 9e18));
             a.codec = stringOr (v["codec"]);
             a.source = stringOr (v["source"]);
             a.lengthSeconds = numberOr (v["lengthSeconds"], 0.0);
@@ -159,7 +161,7 @@ namespace a3t
             o.setProperty ("discNo", t.discNo);
             o.setProperty ("rating", t.rating);
             o.setProperty ("playCount", t.playCount);
-            o.setProperty ("gainDb", t.gainDb);
+            o.setProperty ("gainDb", quantised (t.gainDb));
         }
 
         void readTrackStrings (TrackInfo& t, const juce::var& v)
@@ -196,7 +198,7 @@ namespace a3t
             auto* o = new juce::DynamicObject();
             o->setProperty ("camelot", k.camelot);
             o->setProperty ("musical", k.musical);
-            o->setProperty ("confidence", k.confidence);
+            o->setProperty ("confidence", quantised (k.confidence));
             return makeObject (o);
         }
 
@@ -212,8 +214,8 @@ namespace a3t
         juce::var gridToVar (const Grid& g)
         {
             auto* o = new juce::DynamicObject();
-            o->setProperty ("firstBeat", g.firstBeat);
-            o->setProperty ("bpm", g.bpm);
+            o->setProperty ("firstBeat", quantised (g.firstBeat));
+            o->setProperty ("bpm", quantised (g.bpm));
             o->setProperty ("beatsPerBar", g.beatsPerBar);
             o->setProperty ("gridVersion", g.gridVersion);
             o->setProperty ("corrected", g.corrected);
@@ -234,8 +236,8 @@ namespace a3t
         juce::var loudnessToVar (const Loudness& l)
         {
             auto* o = new juce::DynamicObject();
-            o->setProperty ("lufs", l.lufs);
-            o->setProperty ("peakDb", l.peakDb);
+            o->setProperty ("lufs", quantised (l.lufs));
+            o->setProperty ("peakDb", quantised (l.peakDb));
             return makeObject (o);
         }
 
@@ -251,7 +253,7 @@ namespace a3t
         {
             auto* o = new juce::DynamicObject();
             if (a.bpm)
-                o->setProperty ("bpm", *a.bpm);
+                o->setProperty ("bpm", quantised (*a.bpm));
             if (a.key)
                 o->setProperty ("key", keyToVar (*a.key));
             if (a.grid)
@@ -265,7 +267,7 @@ namespace a3t
         {
             Analysis a;
             if (isFiniteNumber (v["bpm"]))
-                a.bpm = static_cast<double> (v["bpm"]);
+                a.bpm = numberOr (v["bpm"], 0.0);
             if (v["key"].getDynamicObject() != nullptr)
                 a.key = keyFromVar (v["key"]);
             if (v["grid"].getDynamicObject() != nullptr)
@@ -285,7 +287,7 @@ namespace a3t
             o->setProperty ("kind", kindName (c.kind));
             if (c.kind == Cue::Kind::hot)
                 o->setProperty ("slot", c.slot);
-            o->setProperty ("time", c.time);
+            o->setProperty ("time", quantised (c.time));
             if (c.kind != Cue::Kind::load)
             {
                 o->setProperty ("colour", c.colour);
@@ -311,7 +313,7 @@ namespace a3t
                 if (! validSlot (c.slot))
                     return std::nullopt;
             }
-            c.time = static_cast<double> (v["time"]);
+            c.time = numberOr (v["time"], 0.0);
             c.colour = stringOr (v["colour"]);
             c.name = stringOr (v["name"]);
             return c;
@@ -322,8 +324,8 @@ namespace a3t
             auto* o = new juce::DynamicObject();
             if (l.slot >= 0)
                 o->setProperty ("slot", l.slot);
-            o->setProperty ("in", l.in);
-            o->setProperty ("out", l.out);
+            o->setProperty ("in", quantised (l.in));
+            o->setProperty ("out", quantised (l.out));
             o->setProperty ("colour", l.colour);
             o->setProperty ("name", l.name);
             o->setProperty ("active", l.active);
@@ -341,8 +343,8 @@ namespace a3t
                 if (! validSlot (l.slot))
                     return std::nullopt;
             }
-            l.in = static_cast<double> (v["in"]);
-            l.out = static_cast<double> (v["out"]);
+            l.in = numberOr (v["in"], 0.0);
+            l.out = numberOr (v["out"], 0.0);
             l.colour = stringOr (v["colour"]);
             l.name = stringOr (v["name"]);
             l.active = boolOr (v["active"], false);
@@ -352,8 +354,8 @@ namespace a3t
         juce::var phraseToVar (const Phrase& p)
         {
             auto* o = new juce::DynamicObject();
-            o->setProperty ("start", p.start);
-            o->setProperty ("end", p.end);
+            o->setProperty ("start", quantised (p.start));
+            o->setProperty ("end", quantised (p.end));
             o->setProperty ("kind", phraseKinds[static_cast<int> (p.kind)]);
             o->setProperty ("mood", phraseMoods[static_cast<int> (p.mood)]);
             o->setProperty ("label", p.label);
@@ -369,8 +371,8 @@ namespace a3t
             Phrase p;
             p.kind = static_cast<Phrase::Kind> (kind);
             p.mood = static_cast<Phrase::Mood> (mood);
-            p.start = static_cast<double> (v["start"]);
-            p.end = static_cast<double> (v["end"]);
+            p.start = numberOr (v["start"], 0.0);
+            p.end = numberOr (v["end"], 0.0);
             p.label = stringOr (v["label"]);
             return p;
         }
@@ -426,6 +428,28 @@ namespace a3t
             }
         }
 
+        // JUCE's parser recurses without a limit.
+        bool nestsTooDeep (const juce::String& text)
+        {
+            constexpr int maxDepth = 64;
+            int depth = 0;
+            bool inString = false, escaped = false;
+            for (auto c : text)
+            {
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+                if (c == '"') inString = true;
+                else if (c == '[' || c == '{') { if (++depth > maxDepth) return true; }
+                else if (c == ']' || c == '}') --depth;
+            }
+            return false;
+        }
+
         const juce::StringArray knownTopKeys {
             "version", "uuid", "revision", "track", "analysis", "stems", "cues", "loops", "phrases", "events" };
 
@@ -477,6 +501,9 @@ namespace a3t
         Loaded out;
         out.status = Status::damaged;
 
+        if (nestsTooDeep (json))
+            return out;
+
         juce::var v;
         if (juce::JSON::parse (json, v).failed() || v.getDynamicObject() == nullptr)
             return out;
@@ -484,12 +511,13 @@ namespace a3t
         const auto version = v["version"];
         if (! (version.isInt() || version.isInt64()))
             return out;
-        if (static_cast<int> (version) > formatVersion)
+        const auto major = static_cast<juce::int64> (version);
+        if (major > formatVersion)
         {
             out.status = Status::newer;
             return out;
         }
-        if (static_cast<int> (version) < 1)
+        if (major < 1)
             return out;
 
         out.data = dataFromObject (v);

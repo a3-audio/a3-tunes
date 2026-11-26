@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <random>
+
 using namespace a3t;
 
 namespace
@@ -152,4 +154,65 @@ TEST (Json, TrackHelpersRoundTripAndKeepExtras)
     A3tData a, b;
     a.track = expected; b.track = back;
     EXPECT_TRUE (a == b);
+}
+
+TEST (Json, RandomDoublesRoundTripExactly)
+{
+    std::mt19937_64 rng (12345);
+    std::uniform_real_distribution<double> dist (0.0, 36000.0);
+    A3tData d;
+    for (int i = 0; i < 1000; ++i)
+    {
+        Cue c; c.time = dist (rng);
+        d.cues.push_back (c);
+    }
+    const auto first = serialise (d);
+    const auto a = parse (first).data;
+    const auto b = parse (serialise (a)).data;
+    EXPECT_TRUE (a == b);
+    EXPECT_EQ (serialise (a), first);
+}
+
+TEST (Json, SumOfFloatsSurvivesAsQuantised)
+{
+    A3tData d;
+    Cue c; c.time = 0.1 + 0.2;
+    d.cues.push_back (c);
+    const auto r = parse (serialise (d)).data;
+    ASSERT_EQ (r.cues.size(), 1u);
+    EXPECT_EQ (r.cues[0].time, quantised (0.3));
+}
+
+TEST (Json, HugeNumbersClampInsteadOfOverflowing)
+{
+    auto r = parse (R"({"version":1,"track":{"rating":1e300,"year":1e300,"audio":{"bitrate":1e300}}})");
+    ASSERT_EQ (r.status, Status::ok);
+    EXPECT_EQ (r.data.track.rating, 5);
+    r = parse (R"({"version":1,"track":{"rating":-1e300}})");
+    EXPECT_EQ (r.data.track.rating, 0);
+}
+
+TEST (Json, VersionIsComparedWide)
+{
+    EXPECT_EQ (parse (R"({"version":4294967297})").status, Status::newer);
+    EXPECT_EQ (parse (R"({"version":0})").status, Status::damaged);
+}
+
+TEST (Json, DeepNestingIsDamagedNotACrash)
+{
+    EXPECT_EQ (parse (juce::String::repeatedString ("[", 100000)).status, Status::damaged);
+    EXPECT_EQ (parse (juce::String::repeatedString (R"({"a":)", 100000)).status, Status::damaged);
+    EXPECT_EQ (parse (R"({"version":1,"x":"[[[[\"[[[","y":[[1]]})").status, Status::ok);
+}
+
+TEST (Json, LoopSlot16AndUnknownCueKindAreSkipped)
+{
+    const auto r = parse (R"({"version":1,
+        "loops":[{"slot":16,"in":1,"out":2},{"slot":15,"in":3,"out":4}],
+        "cues":[{"kind":"banana","time":1},{"kind":"load","time":2}]})");
+    ASSERT_EQ (r.status, Status::ok);
+    ASSERT_EQ (r.data.loops.size(), 1u);
+    EXPECT_EQ (r.data.loops[0].slot, 15);
+    ASSERT_EQ (r.data.cues.size(), 1u);
+    EXPECT_EQ (r.data.cues[0].kind, Cue::Kind::load);
 }
