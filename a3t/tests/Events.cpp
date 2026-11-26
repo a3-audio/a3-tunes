@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Raphael Eismann
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "a3t/Events.h"
+#include "a3t/Quantise.h"
 
 #include <gtest/gtest.h>
 
@@ -262,4 +263,22 @@ TEST (Events, NonFiniteBeatOnAKnownTypeIsSkipped)
     EXPECT_FALSE (eventFromVar (v).has_value());
     v.getDynamicObject()->setProperty ("beat", std::numeric_limits<double>::quiet_NaN());
     EXPECT_FALSE (eventFromVar (v).has_value());
+}
+
+TEST (Events, DoublesRoundTripExactlyThroughTheText)
+{
+    Event shot; shot.beat = 0.1 + 0.2;
+    Event pos; pos.type = EventType::setpos; pos.beat = 1.0 / 3.0;
+    pos.azimuth = 1.0 / 3.0; pos.elevation = 2.0 / 3.0;
+    for (const auto& e : { shot, pos })
+    {
+        const auto once = eventFromVar (juce::JSON::parse (juce::JSON::toString (toVar (e), true)));
+        ASSERT_TRUE (once.has_value());
+        const auto twice = eventFromVar (juce::JSON::parse (juce::JSON::toString (toVar (*once), true)));
+        ASSERT_TRUE (twice.has_value());
+        EXPECT_TRUE (*once == *twice);
+        EXPECT_EQ (once->beat, quantised (e.beat));
+        EXPECT_EQ (once->azimuth, quantised (e.azimuth));
+        EXPECT_EQ (once->elevation, quantised (e.elevation));
+    }
 }

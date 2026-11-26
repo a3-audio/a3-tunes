@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Raphael Eismann
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "a3t/Events.h"
+#include "a3t/Quantise.h"
 
 #include <algorithm>
 #include <cmath>
@@ -116,8 +117,8 @@ namespace a3t
             const auto elevation = finiteNumber (v["elevation"]);
             if (! azimuth || ! elevation)
                 return false;
-            e.azimuth = *azimuth;
-            e.elevation = *elevation;
+            e.azimuth = quantised (*azimuth);
+            e.elevation = quantised (*elevation);
             return true;
         }
 
@@ -188,7 +189,7 @@ namespace a3t
         Event e;
         e.type = typeFrom (v);
         e.stem = *stem;
-        e.beat = *beat;
+        e.beat = quantised (*beat);
         e.origin = *origin;
         e.active = v.hasProperty ("active") ? (bool) v["active"] : true;
         if (e.type == EventType::unknown)
@@ -207,7 +208,7 @@ namespace a3t
         const char* const typeName = e.type == EventType::shot ? "shot" : e.type == EventType::setpos ? "setpos" : "resetpos";
         o->setProperty ("type", typeName);
         o->setProperty ("stem", e.stem);
-        o->setProperty ("beat", e.beat);
+        o->setProperty ("beat", quantised (e.beat));
         if (e.type == EventType::shot)
         {
             o->setProperty ("shape", shapeNames[(int) e.shape]);
@@ -218,8 +219,8 @@ namespace a3t
         }
         if (e.type == EventType::setpos)
         {
-            o->setProperty ("azimuth", e.azimuth);
-            o->setProperty ("elevation", e.elevation);
+            o->setProperty ("azimuth", quantised (e.azimuth));
+            o->setProperty ("elevation", quantised (e.elevation));
         }
         o->setProperty ("active", e.active);
         o->setProperty ("origin", e.origin == Origin::prepared ? "prepared" : "hand");

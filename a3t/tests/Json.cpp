@@ -216,3 +216,21 @@ TEST (Json, LoopSlot16AndUnknownCueKindAreSkipped)
     ASSERT_EQ (r.data.cues.size(), 1u);
     EXPECT_EQ (r.data.cues[0].kind, Cue::Kind::load);
 }
+
+TEST (Json, RandomEventsRoundTripExactly)
+{
+    std::mt19937_64 rng (777);
+    std::uniform_real_distribution<double> beat (0.0, 2000.0), az (-180.0, 180.0), el (-90.0, 90.0);
+    A3tData d;
+    for (int i = 0; i < 1000; ++i)
+    {
+        Event e; e.type = EventType::setpos; e.stem = i % 4;
+        e.beat = beat (rng); e.azimuth = az (rng); e.elevation = el (rng);
+        d.events.push_back (e);
+    }
+    const auto first = serialise (d);
+    const auto a = parse (first).data;
+    const auto b = parse (serialise (a)).data;
+    EXPECT_TRUE (a == b);
+    EXPECT_EQ (serialise (a), serialise (b));
+}
