@@ -182,6 +182,7 @@ namespace a3t
         if (sidecar.phrases) out.phrases = *sidecar.phrases;
         if (sidecar.analysis) applyAnalysis (out.analysis, *sidecar.analysis);
         out.track = applyTrackFields (out.track, sidecar.trackFields);
+        canonicalOrder (out);
         return out;
     }
 

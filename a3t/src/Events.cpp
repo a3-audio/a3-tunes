@@ -249,6 +249,11 @@ namespace a3t
         return Add::added;
     }
 
+    void sortEvents (std::vector<Event>& events)
+    {
+        std::stable_sort (events.begin(), events.end(), sortsBefore);
+    }
+
     bool EventList::remove (int index)
     {
         if (index < 0 || index >= (int) list.size())

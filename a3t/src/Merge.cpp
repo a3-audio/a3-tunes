@@ -117,7 +117,7 @@ namespace a3t
                     out.push_back (makeChange (section, Kind::added, r.key, {}, describe (*r.item)));
         }
 
-        // Laptop order stays; replaced items stay in place; added ones go last.
+        // Order is left to canonicalOrder, which overlay applies.
         template <typename T>
         std::vector<T> applySection (const std::vector<T>& laptop, const std::vector<T>& rig,
                                      const std::set<juce::String>& taken)
@@ -139,14 +139,6 @@ namespace a3t
                 if (taken.count (r.key) > 0 && laptopByKey.count (r.key) == 0)
                     out.push_back (*r.item);
             return out;
-        }
-
-        std::vector<Event> sortedEvents (const std::vector<Event>& events)
-        {
-            EventList list;
-            for (const auto& e : events)
-                list.add (e);
-            return list.events();
         }
 
         // ---- analysis: one item per member ----
@@ -210,7 +202,7 @@ namespace a3t
         void diffPlayCount (const A3tData& laptop, const juce::var& rigValue, std::vector<Change>& out)
         {
             const int mine = laptop.track.playCount;
-            if (! isNumber (rigValue) || static_cast<int> (rigValue) == mine)
+            if (! isNumber (rigValue) || static_cast<int> (rigValue) <= mine)   // a no-op is no difference
                 return;
             auto c = makeChange (Section::trackField, Kind::changed, trackFieldKey (playCountField),
                                  juce::String (mine), juce::String (static_cast<int> (rigValue)));
@@ -272,8 +264,7 @@ namespace a3t
     {
         // The chosen parts go through overlay, so a merge and an overlay cannot disagree on a field.
         Sidecar chosen;
-        if (rig.events)
-            chosen.events = sortedEvents (applySection (laptop.events, *rig.events, takeFromRig));
+        if (rig.events) chosen.events = applySection (laptop.events, *rig.events, takeFromRig);
         if (rig.cues) chosen.cues = applySection (laptop.cues, *rig.cues, takeFromRig);
         if (rig.loops) chosen.loops = applySection (laptop.loops, *rig.loops, takeFromRig);
         if (rig.phrases) chosen.phrases = applySection (laptop.phrases, *rig.phrases, takeFromRig);

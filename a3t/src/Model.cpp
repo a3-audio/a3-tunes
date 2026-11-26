@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "a3t/Model.h"
 
+#include <algorithm>
+
 namespace a3t
 {
     namespace
@@ -111,6 +113,25 @@ namespace a3t
     juce::String newUuid()
     {
         return juce::Uuid().toDashedString().toLowerCase();
+    }
+
+    void canonicalOrder (A3tData& d)
+    {
+        std::stable_sort (d.cues.begin(), d.cues.end(), [] (const Cue& a, const Cue& b)
+        {
+            if (a.time != b.time) return a.time < b.time;
+            if (a.kind != b.kind) return static_cast<int> (a.kind) < static_cast<int> (b.kind);
+            return a.slot < b.slot;
+        });
+        std::stable_sort (d.loops.begin(), d.loops.end(), [] (const Loop& a, const Loop& b)
+        {
+            return a.in != b.in ? a.in < b.in : a.slot < b.slot;
+        });
+        std::stable_sort (d.phrases.begin(), d.phrases.end(), [] (const Phrase& a, const Phrase& b)
+        {
+            return a.start < b.start;
+        });
+        sortEvents (d.events);
     }
 
     bool operator== (const A3tData& a, const A3tData& b)

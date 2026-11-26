@@ -64,6 +64,9 @@ namespace a3t
         std::vector<Event> list;
     };
 
+    // The EventList order, for a vector built outside it; stable, never drops an event.
+    void sortEvents (std::vector<Event>&);
+
     struct HomePose
     {
         double azimuth = 0.0, elevation = 0.0;

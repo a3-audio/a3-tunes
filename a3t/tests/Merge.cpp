@@ -287,3 +287,196 @@ TEST (Merge, ApplyThenOverlayAgreeWhenEverythingIsTaken)
     applied.revision = laptop.revision;
     EXPECT_TRUE (applied == overlay (laptop, rig));
 }
+
+namespace
+{
+    Cue memoryCue (double time)
+    {
+        Cue c;
+        c.kind = Cue::Kind::memory;
+        c.time = time;
+        return c;
+    }
+
+    Loop loopAt (int slot, double in)
+    {
+        Loop l;
+        l.slot = slot;
+        l.in = in;
+        l.out = in + 4.0;
+        return l;
+    }
+
+    Phrase phraseAt (double start)
+    {
+        Phrase p;
+        p.start = start;
+        p.end = start + 16.0;
+        return p;
+    }
+}
+
+TEST (Merge, ReorderedAndInsertedSectionsStillAgreeWithOverlay)
+{
+    auto laptop = laptopData();
+    laptop.cues = { hotCue (1, 8.0), hotCue (2, 16.0), hotCue (3, 24.0) };
+    laptop.loops = { loopAt (1, 4.0), loopAt (2, 20.0) };
+    laptop.phrases = { phraseAt (0.0), phraseAt (32.0) };
+
+    auto rig = sidecarFor (laptop);
+    rig.cues = std::vector<Cue> { hotCue (3, 24.0), hotCue (1, 8.0), hotCue (5, 12.0), hotCue (2, 16.0) };
+    rig.loops = std::vector<Loop> { loopAt (2, 20.0), loopAt (7, 10.0), loopAt (1, 4.0) };
+    rig.phrases = std::vector<Phrase> { phraseAt (32.0), phraseAt (16.0), phraseAt (0.0) };
+
+    auto applied = applyChanges (laptop, rig, allKeys (diff (laptop, rig)));
+    applied.revision = laptop.revision;
+    EXPECT_TRUE (applied == overlay (laptop, rig));
+}
+
+TEST (Merge, OverlayReturnsCanonicalOrder)
+{
+    const auto laptop = laptopData();
+    auto rig = sidecarFor (laptop);
+    rig.cues = std::vector<Cue> { hotCue (3, 24.0), memoryCue (8.0), hotCue (1, 8.0) };
+    rig.loops = std::vector<Loop> { loopAt (2, 20.0), loopAt (1, 4.0) };
+    rig.phrases = std::vector<Phrase> { phraseAt (32.0), phraseAt (0.0) };
+
+    const auto out = overlay (laptop, rig);
+    ASSERT_EQ (out.cues.size(), 3u);
+    EXPECT_EQ (out.cues[0].kind, Cue::Kind::hot);   // time 8, hot before memory
+    EXPECT_EQ (out.cues[1].kind, Cue::Kind::memory);
+    EXPECT_EQ (out.cues[2].slot, 3);
+    EXPECT_EQ (out.loops[0].in, 4.0);
+    EXPECT_EQ (out.phrases[0].start, 0.0);
+}
+
+TEST (Merge, NoEventIsEverDropped)
+{
+    A3tData laptop = laptopData();
+    laptop.events.clear();
+    for (int i = 0; i < maxEvents; ++i)
+        laptop.events.push_back (shotAt (i * 2.0));
+    auto rig = sidecarFor (laptop);
+    auto events = laptop.events;
+    events.push_back (shotAt (1.0, 2));
+    rig.events = events;
+
+    const auto applied = applyChanges (laptop, rig, { "event:2:1.000000:shot" });
+    ASSERT_EQ (applied.events.size(), 513u);
+    EXPECT_TRUE (std::is_sorted (applied.events.begin(), applied.events.end(),
+                                 [] (const Event& a, const Event& b) { return a.beat < b.beat; }));
+    EXPECT_EQ (overlay (laptop, rig).events.size(), 513u);
+}
+
+TEST (Merge, PlayCountNotLargerIsNoDifference)
+{
+    const auto laptop = laptopData();   // 10
+    auto rig = sidecarFor (laptop);
+    rig.trackFields.set ("playCount", 4);
+    EXPECT_TRUE (diff (laptop, rig).empty());
+    rig.trackFields.set ("playCount", 10);
+    EXPECT_TRUE (diff (laptop, rig).empty());
+    rig.trackFields.set ("playCount", 11);
+    EXPECT_EQ (diff (laptop, rig).size(), 1u);
+}
+
+TEST (Merge, UnknownEventSurvivesWithItsRawPayload)
+{
+    juce::var parsed;
+    ASSERT_TRUE (juce::JSON::parse (R"({"type":"future","stem":1,"beat":8.0,"x":[1,2]})", parsed).wasOk());
+    Event unknown;
+    unknown.type = EventType::unknown;
+    unknown.stem = 1;
+    unknown.beat = 8.0;
+    unknown.raw = parsed;
+
+    auto laptop = laptopData();
+    laptop.events.push_back (unknown);
+    auto rig = sidecarFor (laptop);
+    rig.events = std::vector<Event> { shotAt (8.0, 1) };   // the unknown one is gone from the rig
+
+    const auto changes = diff (laptop, rig);
+    const auto* removed = find (changes, "event:1:8.000000:unknown");
+    ASSERT_NE (removed, nullptr);
+    EXPECT_EQ (removed->kind, Change::Kind::removed);
+
+    const auto count = [] (const A3tData& d)
+    {
+        return std::count_if (d.events.begin(), d.events.end(), [] (const Event& e) { return e.type == EventType::unknown; });
+    };
+    const auto kept = applyChanges (laptop, rig, {});
+    ASSERT_EQ (count (kept), 1);
+    for (const auto& e : kept.events)
+        if (e.type == EventType::unknown)
+            EXPECT_EQ (juce::JSON::toString (e.raw, true), juce::JSON::toString (parsed, true));
+    EXPECT_EQ (count (applyChanges (laptop, rig, { "event:1:8.000000:unknown" })), 0);
+
+    // present in the rig, not in the laptop: taken, it arrives with its payload
+    auto rigWith = sidecarFor (laptop);
+    rigWith.events = laptop.events;
+    auto bare = laptop;
+    bare.events.erase (std::remove_if (bare.events.begin(), bare.events.end(),
+                                       [] (const Event& e) { return e.type == EventType::unknown; }),
+                       bare.events.end());
+    const auto added = applyChanges (bare, rigWith, { "event:1:8.000000:unknown" });
+    ASSERT_EQ (count (added), 1);
+    for (const auto& e : added.events)
+        if (e.type == EventType::unknown)
+            EXPECT_EQ (juce::JSON::toString (e.raw, true), juce::JSON::toString (parsed, true));
+}
+
+TEST (Merge, DuplicateKeysAreConsistentBetweenDiffAndApply)
+{
+    auto laptop = laptopData();
+    laptop.cues = { memoryCue (5.0), memoryCue (5.0) };
+    auto rig = sidecarFor (laptop);
+    Cue named = memoryCue (5.0);
+    named.name = "second";
+    rig.cues = std::vector<Cue> { memoryCue (5.0), named };
+
+    const auto changes = diff (laptop, rig);
+    ASSERT_EQ (changes.size(), 1u);
+    EXPECT_EQ (changes[0].key, "cue:memory:5.000000#2");
+
+    auto applied = applyChanges (laptop, rig, allKeys (changes));
+    applied.revision = laptop.revision;
+    EXPECT_TRUE (applied == overlay (laptop, rig));
+    EXPECT_EQ (applied.cues[1].name, "second");
+}
+
+TEST (Merge, TakingARemovalOfCueLoopAndPhrase)
+{
+    auto laptop = laptopData();
+    laptop.loops = { loopAt (1, 4.0) };
+    laptop.phrases = { phraseAt (0.0) };
+    auto rig = sidecarFor (laptop);
+    rig.cues = std::vector<Cue> {};
+    rig.loops = std::vector<Loop> {};
+    rig.phrases = std::vector<Phrase> {};
+
+    const auto result = applyChanges (laptop, rig, { "cue:hot:3", "loop:1", "phrase:0.000000" });
+    EXPECT_TRUE (result.cues.empty());
+    EXPECT_TRUE (result.loops.empty());
+    EXPECT_TRUE (result.phrases.empty());
+
+    const auto kept = applyChanges (laptop, rig, {});
+    EXPECT_EQ (kept.cues.size(), 1u);
+    EXPECT_EQ (kept.loops.size(), 1u);
+    EXPECT_EQ (kept.phrases.size(), 1u);
+}
+
+TEST (Merge, ChangedMemoryCueIsTakenByKey)
+{
+    auto laptop = laptopData();
+    laptop.cues = { memoryCue (31.2) };
+    auto rig = sidecarFor (laptop);
+    Cue renamed = memoryCue (31.2);
+    renamed.name = "break";
+    rig.cues = std::vector<Cue> { renamed };
+
+    const auto changes = diff (laptop, rig);
+    ASSERT_EQ (changes.size(), 1u);
+    EXPECT_EQ (changes[0].kind, Change::Kind::changed);
+    EXPECT_EQ (applyChanges (laptop, rig, { "cue:memory:31.200000" }).cues[0].name, "break");
+    EXPECT_TRUE (applyChanges (laptop, rig, {}).cues[0].name.isEmpty());
+}

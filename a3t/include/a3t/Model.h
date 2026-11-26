@@ -107,5 +107,8 @@ namespace a3t
     };
 
     juce::String newUuid();   // random, lower-case, 8-4-4-4-12
+    // The one order every section is kept in: cues by (time, hot < memory < load, slot),
+    // loops by (in, slot), phrases by start, events as EventList sorts them. Stable.
+    void canonicalOrder (A3tData&);
     bool operator== (const A3tData&, const A3tData&);   // field-wise; used by tests and the merge
 }

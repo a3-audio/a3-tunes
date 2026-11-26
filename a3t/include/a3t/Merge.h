@@ -30,6 +30,7 @@ namespace a3t
     // Automatic changes apply regardless. revision + 1, uuid unchanged.
     A3tData applyChanges (const A3tData& laptop, const Sidecar& rig, const std::set<juce::String>& takeFromRig);
 
+    // Assumes the sidecar belongs to the data (see belongsTo).
     // The laptop was saved after the rig's sidecar was made.
     bool laptopChangedSince (const A3tData&, const Sidecar&);
 }
