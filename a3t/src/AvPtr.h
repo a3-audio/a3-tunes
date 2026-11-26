@@ -63,7 +63,7 @@ inline juce::int64 declaredLength (const AVFormatContext& format, const AVStream
     if (rate <= 0)
         return 0;
     if (stream.duration > 0)
-        return av_rescale_q (stream.duration, stream.time_base, AVRational { 1, rate });
-    return format.duration > 0 ? av_rescale (format.duration, rate, AV_TIME_BASE) : 0;
+        return av_rescale_q_rnd (stream.duration, stream.time_base, AVRational { 1, rate }, AV_ROUND_NEAR_INF);
+    return format.duration > 0 ? av_rescale_rnd (format.duration, rate, AV_TIME_BASE, AV_ROUND_NEAR_INF) : 0;
 }
 }

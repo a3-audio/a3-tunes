@@ -36,6 +36,8 @@ struct TrackDecoder::Impl
     bool aligned = true;                       // false after a seek until the first frame's position is known
     juce::int64 target = 0;
     bool flushed = false;
+    bool alignFailed = false;                  // a seek could not be placed exactly
+    bool failed = false;                       // sticky: the stream could not be converted
 
     bool init (const juce::File& file, int track)
     {
@@ -55,7 +57,7 @@ struct TrackDecoder::Impl
             || avcodec_open2 (codec.get(), decoder, nullptr) < 0)
             return false;
         rate = stream.codecpar->sample_rate;
-        numChannels = stream.codecpar->ch_layout.nb_channels;
+        numChannels = codec->ch_layout.nb_channels;
         if (rate <= 0 || numChannels <= 0)
             return false;
         pending.assign ((size_t) numChannels, {});
@@ -79,14 +81,23 @@ struct TrackDecoder::Impl
 
     int bufferedFrames() const { return (int) (pending[0].size() - pendingStart); }
 
+    // Drops the consumed prefix once it is a sizeable part of the buffer, so memory stays bounded
+    // by a small multiple of the read size plus one codec frame, while moves stay amortised.
+    void compact()
+    {
+        constexpr size_t threshold = 8192;
+        if (pendingStart < threshold && pendingStart != pending[0].size())
+            return;
+        if (pendingStart == 0)
+            return;
+        for (auto& c : pending)
+            c.erase (c.begin(), c.begin() + (long) pendingStart);
+        pendingStart = 0;
+    }
+
     void append (const std::vector<std::vector<float>>& chunk, int count)
     {
-        if (pendingStart > 0 && pendingStart == pending[0].size())
-        {
-            for (auto& c : pending)
-                c.clear();
-            pendingStart = 0;
-        }
+        compact();
         for (int c = 0; c < numChannels; ++c)
             pending[(size_t) c].insert (pending[(size_t) c].end(), chunk[(size_t) c].begin(),
                                         chunk[(size_t) c].begin() + count);
@@ -103,6 +114,8 @@ struct TrackDecoder::Impl
         const auto got = swr_convert (swr.get(), planes.data(), capacity,
                                       in != nullptr ? const_cast<const uint8_t**> (in->extended_data) : nullptr,
                                       in != nullptr ? in->nb_samples : 0);
+        if (got < 0)
+            failed = true;
         if (got <= 0)
             return;
         const auto dropped = (int) std::min<juce::int64> (skip, got);
@@ -117,11 +130,12 @@ struct TrackDecoder::Impl
     // Where a decoded frame starts, in samples from the stream's start; -1 if it carries no timestamp.
     juce::int64 positionOf (const AVFrame& f) const
     {
-        if (f.pts == AV_NOPTS_VALUE)
+        const auto pts = f.pts != AV_NOPTS_VALUE ? f.pts : f.best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE)
             return -1;
         const auto& stream = *format->streams[streamIndex];
         const auto start = stream.start_time == AV_NOPTS_VALUE ? 0 : stream.start_time;
-        return av_rescale_q (f.pts - start, stream.time_base, AVRational { 1, rate });
+        return av_rescale_q (pts - start, stream.time_base, AVRational { 1, rate });
     }
 
     void onDecodedFrame()
@@ -130,12 +144,14 @@ struct TrackDecoder::Impl
         {
             aligned = true;
             const auto position = positionOf (*frame);
-            skip = position >= 0 ? std::max<juce::int64> (target - position, 0) : target;
+            // No timestamp is only acceptable when the target is the start; landing after the target cannot be undone.
+            alignFailed = position < 0 ? target > 0 : position > target;
+            skip = position >= 0 ? std::max<juce::int64> (target - position, 0) : 0;
         }
         convert (frame.get());
     }
 
-    // Drains the decoder; false once it needs another packet or is finished.
+    // Hands every frame the decoder has ready to the converter.
     void receiveFrames()
     {
         while (avcodec_receive_frame (codec.get(), frame.get()) >= 0)
@@ -158,7 +174,7 @@ struct TrackDecoder::Impl
     // One more packet's worth of audio into `pending`; false when nothing more will come.
     bool decodeSome()
     {
-        if (flushed)
+        if (flushed || failed)
             return false;
         while (av_read_frame (format.get(), packet.get()) >= 0)
         {
@@ -176,6 +192,8 @@ struct TrackDecoder::Impl
 
     bool seekTo (juce::int64 frameIndex)
     {
+        if (length > 0 && frameIndex > length)
+            return false;
         const auto& stream = *format->streams[streamIndex];
         const auto start = stream.start_time == AV_NOPTS_VALUE ? 0 : stream.start_time;
         const auto ts = start + av_rescale_q (frameIndex, AVRational { 1, rate }, stream.time_base);
@@ -189,12 +207,21 @@ struct TrackDecoder::Impl
         target = frameIndex;
         skip = 0;
         aligned = false;
-        return makeResampler();
+        alignFailed = false;
+        if (! makeResampler())
+            return false;
+        // Decode up to the first frame now: only its position says whether the target can be met.
+        while (! aligned && decodeSome()) {}
+        if (aligned)
+            return ! alignFailed;
+        return frameIndex == 0 || frameIndex == length;   // nothing left to decode is a valid place to stand
     }
 
     int read (float* const* out, int numFrames)
     {
         while (bufferedFrames() < numFrames && decodeSome()) {}
+        if (failed)
+            return 0;
         const auto n = std::min (numFrames, bufferedFrames());
         for (int c = 0; c < numChannels; ++c)
             std::copy_n (pending[(size_t) c].begin() + (long) pendingStart, n, out[c]);
@@ -235,10 +262,29 @@ std::unique_ptr<TrackDecoder> TrackDecoder::open (const juce::File& file, int au
 }
 
 int TrackDecoder::sampleRate() const { return impl->rate; }
+bool TrackDecoder::failed() const { return impl->failed; }
+int TrackDecoder::bufferedFramesForTest() const { return (int) impl->pending[0].size(); }
 int TrackDecoder::channels() const { return impl->numChannels; }
 juce::int64 TrackDecoder::lengthFrames() const { return impl->length; }
 bool TrackDecoder::seek (juce::int64 frame) { return impl->seekTo (std::max<juce::int64> (frame, 0)); }
 int TrackDecoder::read (float* const* channelData, int numFrames) { return impl->read (channelData, numFrames); }
+
+std::optional<juce::int64> countFrames (const juce::File& file, int audioTrack)
+{
+    const auto decoder = TrackDecoder::open (file, audioTrack);
+    if (decoder == nullptr)
+        return std::nullopt;
+    std::vector<std::vector<float>> block ((size_t) decoder->channels(), std::vector<float> (4096));
+    std::vector<float*> planes;
+    for (auto& b : block)
+        planes.push_back (b.data());
+    juce::int64 total = 0;
+    for (int n; (n = decoder->read (planes.data(), 4096)) > 0;)
+        total += n;
+    if (decoder->failed())
+        return std::nullopt;
+    return total;
+}
 
 std::optional<SourceInfo> probeAudio (const juce::File& file, int audioTrack)
 {

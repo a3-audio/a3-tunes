@@ -19,6 +19,9 @@ struct SourceInfo
 // The audioTrack-th audio stream (0-based among audio streams only); nullopt if unreadable.
 std::optional<SourceInfo> probeAudio (const juce::File&, int audioTrack = 0);
 
+// The exact number of frames, by decoding the stream (declared durations can be rounded).
+std::optional<juce::int64> countFrames (const juce::File&, int audioTrack = 0);
+
 // Decodes one audio stream to planar float at the stream's own rate and channel count.
 class TrackDecoder
 {
@@ -30,9 +33,13 @@ public:
     int channels() const;
     juce::int64 lengthFrames() const;
 
-    // Sample-exact: lands on the container's nearest earlier point, then decodes up to `frame`.
+    // Sample-exact for LOSSLESS sources (PCM, FLAC): lands on the container's nearest earlier point,
+    // then decodes up to `frame`. Lossy preroll is not handled. False when the target is past the
+    // end, or the landing position cannot be placed exactly (no timestamp, or after the target).
     bool seek (juce::int64 frame);
     // Frames read; 0 at the end (and on every call after it).
+    bool failed() const;   // sticky: a conversion error ended the stream; read returns 0
+    int bufferedFramesForTest() const;   // frames held in the internal buffer, for the memory-bound test
     int read (float* const* channelData, int numFrames);
 
 private:
