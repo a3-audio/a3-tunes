@@ -5,7 +5,6 @@
 #include "a3t/Model.h"
 #include "a3t/Quantise.h"
 
-
 namespace a3t
 {
     enum class Status { none, ok, damaged, newer };

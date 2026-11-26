@@ -43,7 +43,8 @@ namespace a3t
     WriteResult writeTrack (const WriteRequest&);
 
     // Replaces the a3t.json attachment (and the tags and chapters derived from it) of an existing .a3mkv.
-    // All five audio tracks and a cover attachment are copied as packets, bit for bit; the file is written to a
+    // All five audio tracks and the other attachments are copied as packets, bit for bit; attachments libav does
+    // not expose (no filename or mimetype) are not carried over. The file is written to a
     // unique temporary beside it, verified as in writeTrack, and renamed over the original (mode, owner and
     // symlinks as in writeTrack).
     // Refused, with the file untouched, unless it opens as status ok with five tracks and data.uuid is its uuid.

@@ -38,9 +38,9 @@ public:
     // end, or the landing position cannot be placed exactly (no timestamp, or after the target).
     bool seek (juce::int64 frame);
     // Frames read; 0 at the end (and on every call after it).
+    int read (float* const* channelData, int numFrames);
     bool failed() const;   // sticky: a conversion error ended the stream; read returns 0
     int bufferedFramesForTest() const;   // frames held in the internal buffer, for the memory-bound test
-    int read (float* const* channelData, int numFrames);
 
 private:
     struct Impl;
