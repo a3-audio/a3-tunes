@@ -70,37 +70,9 @@ namespace
         return tracks;
     }
 
-    // A five-track file put together by hand, as another tool could: a PCM original, FLAC stems (one of
-    // them `stemExtra` frames longer), a3t.json with no audio facts, and an attachment a3t knows nothing of.
     juce::File handBuilt (const TempDir& t, juce::int64 stemExtra)
     {
-        const auto wav = writeTestWav (t.dir, "hand.wav", rate, 2, 16, frames, 440.0);
-        std::array<std::unique_ptr<TrackSource>, 1 + numStems> sources;
-        sources[0] = copyPackets (wav);
-        for (size_t s = 1; s < sources.size(); ++s)
-            sources[s] = encodeFlac (wav, rate, 16, s == 2 ? frames + stemExtra : frames);
-        const auto out = t.dir.getChildFile ("hand.a3mkv");
-        A3tData data;
-        data.uuid = uuid;
-        data.track.title = "Hand";
-        const auto json = serialise (data).toStdString();
-        MkvMuxer muxer;
-        EXPECT_TRUE (muxer.create (out));
-        const char* names[] = { "Original", "Stem 1", "Stem 2", "Stem 3", "Stem 4" };
-        std::array<int, 1 + numStems> streams {};
-        for (size_t i = 0; i < sources.size(); ++i)
-            streams[i] = muxer.addAudio (sources[i]->parameters(), sources[i]->timeBase(), names[i], i == 0);
-        EXPECT_TRUE (muxer.addAttachment ("a3t.json", "application/json", juce::MemoryBlock (json.data(), json.size())));
-        EXPECT_TRUE (muxer.addAttachment ("notes.txt", "text/plain", juce::MemoryBlock ("kept as is", 10)));
-        EXPECT_TRUE (muxer.start());
-        for (size_t i = 0; i < sources.size(); ++i)
-        {
-            av::Packet packet (av_packet_alloc());
-            while (sources[i]->next (*packet))
-                EXPECT_TRUE (muxer.write (*packet, streams[i], sources[i]->timeBase()));
-        }
-        EXPECT_TRUE (muxer.finish());
-        return out;
+        return handBuiltFile (t.dir, rate, frames, stemExtra, uuid);
     }
 
     // Write permission off for as long as it lives, so the TempDir can still clean up after a failure.

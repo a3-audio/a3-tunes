@@ -72,8 +72,10 @@ namespace
                 options.switches.insert (arg);
             else if (! valueFlags.contains (arg))
                 options.error = "unknown option " + arg;
-            else if (i + 1 >= args.size())
+            else if (i + 1 >= args.size() || args[i + 1].startsWith ("--"))
                 options.error = "option " + arg + " needs a value";
+            else if (options.has (arg))
+                options.error = "option " + arg + " given twice";
             else
                 options.values[arg] = args[++i];
         }
@@ -114,14 +116,23 @@ namespace
 
     // --- build ----------------------------------------------------------------------------------
 
-    // "RATE/DEPTH": a positive rate and a depth of 16 or 24.
+    bool isDigits (const juce::String& text, int maxLength)
+    {
+        return text.isNotEmpty() && text.length() <= maxLength && text.containsOnly ("0123456789");
+    }
+
+    // "RATE/DEPTH": exactly one slash, a rate in 1..768000 and a depth of 16 or 24.
     bool parseConvert (const juce::String& text, a3t::ConvertTarget& target)
     {
-        const auto parts = juce::StringArray::fromTokens (text, "/", "");
-        if (parts.size() != 2 || ! parts[0].containsOnly ("0123456789") || ! parts[1].containsOnly ("0123456789"))
+        constexpr int maxRate = 768000;
+        const auto slash = text.indexOfChar ('/');
+        if (slash < 0 || text.indexOfChar (slash + 1, '/') >= 0)
             return false;
-        const auto rate = parts[0].getIntValue(), depth = parts[1].getIntValue();
-        if (parts[0].isEmpty() || rate <= 0 || (depth != 16 && depth != 24))
+        const auto rateText = text.substring (0, slash), depthText = text.substring (slash + 1);
+        if (! isDigits (rateText, 7) || ! isDigits (depthText, 2))
+            return false;
+        const auto rate = rateText.getIntValue(), depth = depthText.getIntValue();
+        if (rate <= 0 || rate > maxRate || (depth != 16 && depth != 24))
             return false;
         target = { false, rate, depth };
         return true;
@@ -196,6 +207,16 @@ namespace
 
     // --- info -----------------------------------------------------------------------------------
 
+    // Tells merged data from rig-overlaid data.
+    juce::String sidecarLine (const a3t::OpenResult& opened)
+    {
+        if (opened.appliedSidecar != juce::File())
+            return "sidecar: applied (" + opened.appliedSidecar.getFullPathName() + ")";
+        if (opened.error.isNotEmpty())
+            return "sidecar: ignored (" + opened.error + ")";
+        return "sidecar: none";
+    }
+
     int info (const juce::StringArray& args)
     {
         const auto options = parseOptions (args, {}, {});
@@ -212,9 +233,8 @@ namespace
         std::cout << "status: " << statusName (opened.status) << "\n"
                   << "tracks: " << opened.layout.audioTracks << "\n"
                   << "rate: " << opened.layout.sampleRate << "\n"
-                  << "frames: " << opened.layout.lengthFrames << "\n";
-        if (opened.error.isNotEmpty())
-            std::cerr << "a3t: " << opened.error << "\n";
+                  << "frames: " << opened.layout.lengthFrames << "\n"
+                  << sidecarLine (opened) << "\n";
         return exitOk;
     }
 
@@ -294,6 +314,28 @@ namespace
                       << (c.automatic ? "\tautomatic" : "") << "\n";
     }
 
+    // Splits on commas and keeps empty elements, so "a,,b" can be told from "a,b".
+    juce::StringArray splitKeys (const juce::String& text)
+    {
+        juce::StringArray keys;
+        int start = 0;
+        for (int comma; (comma = text.indexOfChar (start, ',')) >= 0; start = comma + 1)
+            keys.add (text.substring (start, comma));
+        keys.add (text.substring (start));
+        return keys;
+    }
+
+    // "all", "none" or a comma-separated list without empty elements; empty keys on error.
+    bool validTake (const juce::String& take)
+    {
+        if (take == "all" || take == "none")
+            return true;
+        for (const auto& key : splitKeys (take))
+            if (key.trim().isEmpty())
+                return false;
+        return true;
+    }
+
     // Empty set for "none"; every chosen key must exist in the diff, otherwise `error` says which.
     std::set<juce::String> keysToTake (const juce::String& take, const std::vector<a3t::Change>& changes,
                                        juce::String& error)
@@ -307,7 +349,7 @@ namespace
         }
         if (take == "all" || take == "none")
             return chosen;
-        for (const auto& key : juce::StringArray::fromTokens (take, ",", ""))
+        for (const auto& key : splitKeys (take))
         {
             if (known.count (key) == 0)
                 error = "no such change: " + key;
@@ -323,6 +365,10 @@ namespace
             return usageError (options.error.isNotEmpty() ? options.error : "merge takes one FILE");
         if (! options.has ("--list") && ! options.has ("--take"))
             return usageError ("merge needs --take or --list");
+        if (options.has ("--list") && options.has ("--take"))
+            return usageError ("--take and --list cannot be combined");
+        if (options.has ("--take") && ! validTake (options.value ("--take")))
+            return usageError ("--take needs all, none or KEY[,KEY...] without empty keys");
 
         const auto file = fileArg (options.positional[0]);
         const auto in = loadMergeInput (file);
@@ -344,6 +390,11 @@ namespace
         const auto chosen = keysToTake (take, changes, error);
         if (error.isNotEmpty())
             return failure (error);
+        if (changes.empty())
+        {
+            std::cerr << "a3t: nothing to merge\n";
+            return exitOk;
+        }
         if (take == "none")
             return exitOk;
 

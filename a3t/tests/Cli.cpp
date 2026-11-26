@@ -67,15 +67,34 @@ namespace
     }
 
     // The rig changed the rating of the track beside `file`.
-    juce::File rigRated (const juce::File& file, int rating, const juce::String& basedOn = {})
+    juce::File rigSet (const juce::File& file, const juce::String& field, int value, const juce::String& basedOn = {})
     {
         Sidecar s;
         s.basedOnUuid = basedOn.isEmpty() ? openTrack (file).data.uuid : basedOn;
         s.basedOnRevision = 1;
-        s.trackFields.set ("rating", rating);
+        s.trackFields.set (field, value);
         const auto side = sidecarFileFor (file);
         EXPECT_TRUE (saveSidecar (side, s));
         return side;
+    }
+
+    juce::File rigRated (const juce::File& file, int rating, const juce::String& basedOn = {})
+    {
+        return rigSet (file, "rating", rating, basedOn);
+    }
+
+    // Runs `args` and expects a usage error that leaves the file and its sidecar byte-identical.
+    void expectUsageErrorAndNothingWritten (const TempDir& t, const juce::File& file, const juce::File& side,
+                                            const juce::StringArray& args)
+    {
+        const auto fileBefore = bytesOf (file);
+        const auto sideBefore = bytesOf (side);
+        const auto r = run (t, args);
+        EXPECT_EQ (r.exitCode, 1) << args.joinIntoString (" ");
+        EXPECT_FALSE (r.err.isEmpty());
+        EXPECT_EQ (bytesOf (file), fileBefore);
+        ASSERT_TRUE (side.existsAsFile());
+        EXPECT_EQ (bytesOf (side), sideBefore);
     }
 }
 
@@ -224,4 +243,158 @@ TEST (Cli, InfoOnADamagedFilePrintsStatusAndExitsZero)
     const auto r = run (t, { "info", path (file) });
     EXPECT_EQ (r.exitCode, 0) << r.err;
     EXPECT_TRUE (r.out.contains ("damaged")) << r.out;
+}
+
+TEST (Cli, MergeTakeWithoutKeysIsAUsageErrorAndWritesNothing)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigRated (file, 5);
+    for (const char* take : { "", "  ", ",", "trackField:rating,,trackField:rating", ",trackField:rating" })
+        expectUsageErrorAndNothingWritten (t, file, side, { "merge", path (file), "--take", take });
+}
+
+TEST (Cli, MergeTakeWithListIsAUsageError)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigRated (file, 5);
+    expectUsageErrorAndNothingWritten (t, file, side, { "merge", path (file), "--take", "all", "--list" });
+}
+
+TEST (Cli, MergeListAndTakeNoneLeaveFileAndSidecarIdentical)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigRated (file, 5);
+    const auto fileBefore = bytesOf (file);
+    const auto sideBefore = bytesOf (side);
+    EXPECT_EQ (run (t, { "merge", path (file), "--list" }).exitCode, 0);
+    EXPECT_EQ (bytesOf (file), fileBefore);
+    EXPECT_EQ (bytesOf (side), sideBefore);
+}
+
+TEST (Cli, InfoSaysWhetherASidecarWasApplied)
+{
+    TempDir t;
+    const auto file = built (t);
+    EXPECT_TRUE (run (t, { "info", path (file) }).out.contains ("sidecar: none"));
+
+    const auto side = rigRated (file, 5);
+    const auto applied = run (t, { "info", path (file) });
+    EXPECT_TRUE (applied.out.contains ("sidecar: applied (" + path (side) + ")")) << applied.out;
+
+    rigRated (file, 5, "99999999-9999-9999-9999-999999999999");
+    const auto ignored = run (t, { "info", path (file) });
+    EXPECT_TRUE (ignored.out.contains ("sidecar: ignored (")) << ignored.out;
+    EXPECT_TRUE (ignored.out.contains ("another track")) << ignored.out;
+}
+
+TEST (Cli, ConvertOptionRejectsOddValues)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("converted.a3mkv");
+    for (const char* bad : { "44100//24", "44100", "/24", "44100/", "0/24", "44100/32", "-1/24", "+44100/24",
+                             "12345678/24", "768001/24", "44100/24/1", "44.1/24", "abc/24", "" })
+    {
+        auto args = buildArgs (t, out);
+        args.addArray ({ "--convert", bad });
+        EXPECT_EQ (run (t, args).exitCode, 1) << bad;
+        EXPECT_FALSE (out.exists()) << bad;
+    }
+    for (const char* good : { "48000/16", "768000/24" })
+    {
+        auto args = buildArgs (t, out);
+        args.addArray ({ "--convert", good });
+        EXPECT_EQ (run (t, args).exitCode, 0) << good;
+        out.deleteFile();
+    }
+}
+
+TEST (Cli, OptionValueStartingWithDashesIsRefused)
+{
+    TempDir t;
+    const auto r = run (t, { "build", "--out", "--stem1", "x" });
+    EXPECT_EQ (r.exitCode, 1);
+    EXPECT_TRUE (r.err.contains ("--out")) << r.err;
+}
+
+TEST (Cli, RepeatedOptionIsRefused)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto args = buildArgs (t, out);
+    args.addArray ({ "--stem1", path (t.dir.getChildFile ("stem2.wav")) });
+    const auto r = run (t, args);
+    EXPECT_EQ (r.exitCode, 1);
+    EXPECT_TRUE (r.err.contains ("--stem1")) << r.err;
+    EXPECT_FALSE (out.exists());
+}
+
+TEST (Cli, MergeWithNothingToMergeIsANoOp)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigRated (file, 0);   // the file's own rating: no difference
+    const auto fileBefore = bytesOf (file);
+    const auto sideBefore = bytesOf (side);
+    const auto r = run (t, { "merge", path (file), "--take", "all" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_TRUE (r.err.contains ("nothing to merge")) << r.err;
+    EXPECT_EQ (bytesOf (file), fileBefore);
+    EXPECT_EQ (bytesOf (side), sideBefore);
+    EXPECT_EQ (openTrack (file).data.revision, 1);
+}
+
+TEST (Cli, MergeAppliesAnAutomaticChangeOnItsOwn)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigSet (file, "playCount", 7);
+    const auto r = run (t, { "merge", path (file), "--take", "none" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_EQ (openTrack (file).data.revision, 1);   // none writes nothing
+
+    EXPECT_EQ (run (t, { "merge", path (file), "--take", "all" }).exitCode, 0);
+    EXPECT_EQ (openTrack (file).data.track.playCount, 7);
+    EXPECT_EQ (openTrack (file).data.revision, 2);
+    EXPECT_FALSE (side.exists());
+}
+
+TEST (Cli, VerifyFailsOnUnequalLengths)
+{
+    TempDir t;
+    const auto file = handBuiltFile (t.dir, 44100, 30000, 7, "11111111-2222-3333-4444-555555555555");
+    const auto r = run (t, { "verify", path (file) });
+    EXPECT_EQ (r.exitCode, 2);
+    EXPECT_TRUE (r.err.contains ("30007")) << r.err;
+}
+
+TEST (Cli, BuildFailsOnMissingOrBadMeta)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto missing = buildArgs (t, out);
+    missing.set (missing.indexOf ("--meta") + 1, path (t.dir.getChildFile ("nope.json")));
+    EXPECT_EQ (run (t, missing).exitCode, 2);
+
+    auto bad = buildArgs (t, out);
+    bad.set (bad.indexOf ("--meta") + 1, path (writeMeta (t, "{ not json")));
+    const auto r = run (t, bad);
+    EXPECT_EQ (r.exitCode, 2);
+    EXPECT_FALSE (r.err.isEmpty());
+    EXPECT_FALSE (out.exists());
+}
+
+TEST (Cli, MergeFindsTheSidecarByUuidAfterARename)
+{
+    TempDir t;
+    const auto file = built (t);
+    rigRated (file, 5);
+    const auto renamed = t.dir.getChildFile ("renamed.a3mkv");
+    ASSERT_TRUE (file.moveFileTo (renamed));
+    const auto r = run (t, { "merge", path (renamed), "--take", "all" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_EQ (openTrack (renamed).data.track.rating, 5);
+    EXPECT_TRUE (t.dir.findChildFiles (juce::File::findFiles, false, "*.a3events.json").isEmpty());
 }

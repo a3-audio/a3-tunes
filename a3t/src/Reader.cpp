@@ -138,7 +138,10 @@ namespace a3t
             return result;
         const auto loaded = loadSidecar (*found);
         if (loaded.status == Status::ok && belongsTo (loaded.sidecar, result.data))
+        {
             result.data = overlay (result.data, loaded.sidecar);
+            result.appliedSidecar = *found;
+        }
         return result;
     }
 }

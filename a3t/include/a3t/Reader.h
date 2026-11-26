@@ -21,6 +21,7 @@ namespace a3t
         A3tData data;
         TrackLayout layout;
         juce::String error;
+        juce::File appliedSidecar;   // openTrackWithSidecar: the sidecar overlaid on data; none if no file
     };
 
     // ok: a3t.json read. damaged: the file has audio but a3t.json is missing or unparsable (the layout

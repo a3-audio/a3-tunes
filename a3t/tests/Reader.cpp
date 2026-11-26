@@ -167,6 +167,7 @@ TEST (Reader, SidecarIsOverlaid)
     ASSERT_EQ (opened.status, Status::ok);
     EXPECT_EQ (opened.data.track.rating, 4);
     EXPECT_TRUE (opened.error.isEmpty()) << opened.error;
+    EXPECT_EQ (opened.appliedSidecar, sidecarFileFor (r.output));
 }
 
 TEST (Reader, ForeignSidecarIsReportedAndNotApplied)
@@ -178,6 +179,7 @@ TEST (Reader, ForeignSidecarIsReportedAndNotApplied)
     ASSERT_EQ (opened.status, Status::ok);
     EXPECT_EQ (opened.data.track.rating, 2);
     EXPECT_TRUE (opened.error.contains ("another track")) << opened.error;
+    EXPECT_EQ (opened.appliedSidecar, juce::File());
 }
 
 TEST (Reader, RenamedFileStillFindsItsSidecarByUuid)
@@ -190,6 +192,7 @@ TEST (Reader, RenamedFileStillFindsItsSidecarByUuid)
     const auto opened = openTrackWithSidecar (renamed);
     ASSERT_EQ (opened.status, Status::ok);
     EXPECT_EQ (opened.data.track.rating, 5);
+    EXPECT_EQ (opened.appliedSidecar, sidecarFileFor (r.output));
 }
 
 TEST (Reader, SidecarIsNotAppliedToDamagedData)

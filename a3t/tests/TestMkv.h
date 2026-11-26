@@ -3,8 +3,12 @@
 // Looking inside written .a3mkv files: streams, attachments, packets, decoded samples.
 #pragma once
 #include "a3t/Audio.h"
+#include "a3t/Json.h"
 #include "a3t/Model.h"
 #include "AvPtr.h"
+#include "MkvMuxer.h"
+#include "TestAudio.h"
+#include "TrackSource.h"
 
 #include <gtest/gtest.h>
 
@@ -174,3 +178,37 @@ constexpr unsigned char tinyPng[] = {
     0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
     0x82
 };
+
+// A five-track file put together by hand, as another tool could: a PCM original, FLAC stems (one of
+// them `stemExtra` frames longer), a3t.json with no audio facts, and an attachment a3t knows nothing of.
+inline juce::File handBuiltFile (const juce::File& dir, int rate, juce::int64 frames, juce::int64 stemExtra,
+                                 const juce::String& uuid)
+{
+    const auto wav = writeTestWav (dir, "hand.wav", rate, 2, 16, frames, 440.0);
+    std::array<std::unique_ptr<a3t::TrackSource>, 1 + a3t::numStems> sources;
+    sources[0] = a3t::copyPackets (wav);
+    for (size_t s = 1; s < sources.size(); ++s)
+        sources[s] = a3t::encodeFlac (wav, rate, 16, s == 2 ? frames + stemExtra : frames);
+    const auto out = dir.getChildFile ("hand.a3mkv");
+    a3t::A3tData data;
+    data.uuid = uuid;
+    data.track.title = "Hand";
+    const auto json = a3t::serialise (data).toStdString();
+    a3t::MkvMuxer muxer;
+    EXPECT_TRUE (muxer.create (out));
+    const char* names[] = { "Original", "Stem 1", "Stem 2", "Stem 3", "Stem 4" };
+    std::array<int, 1 + a3t::numStems> streams {};
+    for (size_t i = 0; i < sources.size(); ++i)
+        streams[i] = muxer.addAudio (sources[i]->parameters(), sources[i]->timeBase(), names[i], i == 0);
+    EXPECT_TRUE (muxer.addAttachment ("a3t.json", "application/json", juce::MemoryBlock (json.data(), json.size())));
+    EXPECT_TRUE (muxer.addAttachment ("notes.txt", "text/plain", juce::MemoryBlock ("kept as is", 10)));
+    EXPECT_TRUE (muxer.start());
+    for (size_t i = 0; i < sources.size(); ++i)
+    {
+        a3t::av::Packet packet (av_packet_alloc());
+        while (sources[i]->next (*packet))
+            EXPECT_TRUE (muxer.write (*packet, streams[i], sources[i]->timeBase()));
+    }
+    EXPECT_TRUE (muxer.finish());
+    return out;
+}
