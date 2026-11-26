@@ -17,7 +17,7 @@ add_library(a3t STATIC src/Model.cpp src/Events.cpp)
 target_include_directories(a3t PUBLIC include)
 target_link_libraries(a3t PUBLIC a3t-juce PkgConfig::LIBAV)
 
-add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp)
+add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp tests/Model.cpp)
 target_link_libraries(a3t-tests PRIVATE a3t GTest::gtest_main)
 # The CLI tests (Task 10) run the built binary; building the tests builds it.
 add_dependencies(a3t-tests a3t-cli)
