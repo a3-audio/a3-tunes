@@ -13,11 +13,11 @@ target_compile_definitions(a3t-juce INTERFACE $<TARGET_PROPERTY:a3t-juce,COMPILE
 target_include_directories(a3t-juce INTERFACE $<TARGET_PROPERTY:a3t-juce,INCLUDE_DIRECTORIES>)
 target_link_libraries(a3t-juce INTERFACE ZLIB::ZLIB)
 
-add_library(a3t STATIC src/Model.cpp src/Events.cpp)
+add_library(a3t STATIC src/Model.cpp src/Events.cpp src/Json.cpp)
 target_include_directories(a3t PUBLIC include)
 target_link_libraries(a3t PUBLIC a3t-juce PkgConfig::LIBAV)
 
-add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp tests/Model.cpp)
+add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp tests/Model.cpp tests/Json.cpp)
 target_link_libraries(a3t-tests PRIVATE a3t GTest::gtest_main)
 # The CLI tests (Task 10) run the built binary; building the tests builds it.
 add_dependencies(a3t-tests a3t-cli)
