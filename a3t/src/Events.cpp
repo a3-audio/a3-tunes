@@ -212,7 +212,7 @@ namespace a3t
         if (e.type == EventType::shot)
         {
             o->setProperty ("shape", shapeNames[(int) e.shape]);
-            o->setProperty ("bars", e.bars);
+            o->setProperty ("bars", validBars (e.bars));
             o->setProperty ("reversed", e.reversed);
             o->setProperty ("speed", validSpeed (e.speed));
             o->setProperty ("seed", juce::String (std::to_string (e.seed)));

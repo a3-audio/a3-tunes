@@ -290,3 +290,12 @@ TEST (Events, QuantisedKeepsHugeFiniteValues)
     EXPECT_EQ (quantised (1e300), 1e300);
     EXPECT_EQ (quantised (0.1 + 0.2), 0.3);
 }
+
+TEST (Events, ToVarWritesOnlyValidBars)
+{
+    auto e = shotAt (0, 1.0);
+    e.bars = 3.0;
+    EXPECT_EQ (static_cast<double> (toVar (e)["bars"]), 4.0);
+    e.bars = 0.25;
+    EXPECT_EQ (static_cast<double> (toVar (e)["bars"]), 0.25);
+}
