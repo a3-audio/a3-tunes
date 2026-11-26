@@ -459,3 +459,28 @@ TEST (Cli, SeekbenchCompareReadsLooseStems)
     EXPECT_EQ (missing.exitCode, 2);
     EXPECT_FALSE (missing.err.isEmpty());
 }
+
+TEST (Cli, HugeFiniteValuesSurviveBuildAndInfo)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto args = buildArgs (t, out);
+    args.set (args.indexOf ("--meta") + 1, path (writeMeta (t, R"({"cues":[{"kind":"memory","time":1e300}],
+        "events":[{"type":"setpos","stem":1,"beat":2,"azimuth":1e305,"elevation":0}]})")));
+    const auto b = run (t, args);
+    ASSERT_EQ (b.exitCode, 0) << b.err;
+    const auto data = openTrack (out).data;
+    ASSERT_EQ (data.cues.size(), 1u);
+    EXPECT_EQ (data.cues[0].time, 1e300);
+    ASSERT_EQ (data.events.size(), 1u);
+    EXPECT_EQ (data.events[0].azimuth, 1e305);
+    const auto info = run (t, { "info", path (out) });
+    EXPECT_EQ (info.exitCode, 0) << info.err;
+    // info prints a3t.json first; read it back rather than matching JUCE's number text.
+    const auto shown = parse (info.out.upToFirstOccurrenceOf ("\nstatus:", false, false));
+    ASSERT_EQ (shown.status, Status::ok) << info.out;
+    ASSERT_EQ (shown.data.cues.size(), 1u);
+    EXPECT_EQ (shown.data.cues[0].time, 1e300);
+    ASSERT_EQ (shown.data.events.size(), 1u);
+    EXPECT_EQ (shown.data.events[0].azimuth, 1e305);
+}

@@ -282,3 +282,11 @@ TEST (Events, DoublesRoundTripExactlyThroughTheText)
         EXPECT_EQ (once->elevation, quantised (e.elevation));
     }
 }
+
+TEST (Events, QuantisedKeepsHugeFiniteValues)
+{
+    EXPECT_EQ (quantised (1e308), 1e308);
+    EXPECT_EQ (quantised (-1e308), -1e308);
+    EXPECT_EQ (quantised (1e300), 1e300);
+    EXPECT_EQ (quantised (0.1 + 0.2), 0.3);
+}

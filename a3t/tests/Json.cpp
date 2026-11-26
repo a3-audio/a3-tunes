@@ -234,3 +234,16 @@ TEST (Json, RandomEventsRoundTripExactly)
     EXPECT_TRUE (a == b);
     EXPECT_EQ (serialise (a), serialise (b));
 }
+
+TEST (Json, HugeFiniteValuesSurviveTheRoundTrip)
+{
+    const auto first = parse (R"({"version":1,"cues":[{"kind":"memory","time":1e300}],
+        "events":[{"type":"setpos","stem":1,"beat":2,"azimuth":1e305,"elevation":0}]})");
+    ASSERT_EQ (first.status, Status::ok);
+    const auto again = parse (serialise (first.data));
+    ASSERT_EQ (again.status, Status::ok);
+    ASSERT_EQ (again.data.cues.size(), 1u);
+    EXPECT_EQ (again.data.cues[0].time, 1e300);
+    ASSERT_EQ (again.data.events.size(), 1u);
+    EXPECT_EQ (again.data.events[0].azimuth, 1e305);
+}
