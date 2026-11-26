@@ -1,0 +1,6 @@
+# Personal Rekordbox library and sample audio: never public.
+/recordbox/
+*.zip
+*.m4a
+*.db
+*.mkv
