@@ -212,3 +212,34 @@ inline juce::File handBuiltFile (const juce::File& dir, int rate, juce::int64 fr
     EXPECT_TRUE (muxer.finish());
     return out;
 }
+
+// Five PCM tracks (copied from one WAV) with the given names and a3t.json: what the writer would never
+// produce, for the checks a reader-side verify must make too.
+inline juce::File handBuiltPcmFile (const juce::File& dir, const std::array<const char*, 1 + a3t::numStems>& names,
+                                    const juce::String& uuid)
+{
+    const auto wav = writeTestWav (dir, "pcm.wav", 44100, 2, 16, 20000, 440.0);
+    const auto out = dir.getChildFile ("pcm.a3mkv");
+    a3t::A3tData data;
+    data.uuid = uuid;
+    const auto json = a3t::serialise (data).toStdString();
+    a3t::MkvMuxer muxer;
+    EXPECT_TRUE (muxer.create (out));
+    std::array<std::unique_ptr<a3t::TrackSource>, 1 + a3t::numStems> sources;
+    std::array<int, 1 + a3t::numStems> streams {};
+    for (size_t i = 0; i < sources.size(); ++i)
+    {
+        sources[i] = a3t::copyPackets (wav);
+        streams[i] = muxer.addAudio (sources[i]->parameters(), sources[i]->timeBase(), names[i], i == 0);
+    }
+    EXPECT_TRUE (muxer.addAttachment ("a3t.json", "application/json", juce::MemoryBlock (json.data(), json.size())));
+    EXPECT_TRUE (muxer.start());
+    for (size_t i = 0; i < sources.size(); ++i)
+    {
+        a3t::av::Packet packet (av_packet_alloc());
+        while (sources[i]->next (*packet))
+            EXPECT_TRUE (muxer.write (*packet, streams[i], sources[i]->timeBase()));
+    }
+    EXPECT_TRUE (muxer.finish());
+    return out;
+}

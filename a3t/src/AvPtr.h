@@ -36,6 +36,13 @@ inline void quietLogs()
     juce::ignoreUnused (quiet);
 }
 
+// A metadata entry as text; empty when the key is not there.
+inline juce::String metadata (const AVDictionary* dictionary, const char* key)
+{
+    const auto* entry = av_dict_get (dictionary, key, nullptr, 0);
+    return entry != nullptr ? juce::String::fromUTF8 (entry->value) : juce::String();
+}
+
 // Opens a container and reads its stream info; empty on failure.
 inline Format openFormat (const juce::File& file)
 {

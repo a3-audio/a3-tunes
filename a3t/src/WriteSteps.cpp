@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace a3t::writing
@@ -47,7 +48,9 @@ TemporaryFile::~TemporaryFile()
 // deletes it first). FAT, as on most USB sticks, is not atomic about it anyway.
 juce::String TemporaryFile::moveTo (const juce::File& target)
 {
-    if (! flushToDisk())
+    struct stat existing {};
+    const bool targetExists = ::stat (target.getFullPathName().toRawUTF8(), &existing) == 0;
+    if (! flushToDisk (targetExists ? &existing : nullptr))
         return "cannot flush " + file.getFullPathName() + ": " + juce::String (std::strerror (errno));
     if (std::rename (file.getFullPathName().toRawUTF8(), target.getFullPathName().toRawUTF8()) != 0)
         return "cannot rename into place: " + juce::String (std::strerror (errno));
@@ -55,13 +58,34 @@ juce::String TemporaryFile::moveTo (const juce::File& target)
     return {};
 }
 
-bool TemporaryFile::flushToDisk() const
+bool TemporaryFile::flushToDisk (const struct stat* keep) const
 {
     const auto fd = ::open (file.getFullPathName().toRawUTF8(), O_WRONLY | O_CLOEXEC);
     if (fd < 0)
         return false;
+    if (keep != nullptr)
+    {
+        // Owner first: changing it can clear set-id bits that the mode then restores. Only root may
+        // give a file away, so a failed chown is not an error.
+        if (::fchown (fd, keep->st_uid, keep->st_gid) != 0) {}
+        if (::fchmod (fd, keep->st_mode & 07777) != 0)
+        {
+            ::close (fd);
+            return false;
+        }
+    }
     const auto synced = ::fsync (fd) == 0;
     return ::close (fd) == 0 && synced;
+}
+
+juce::File resolvedTarget (const juce::File& target)
+{
+    char* real = ::realpath (target.getFullPathName().toRawUTF8(), nullptr);
+    if (real == nullptr)
+        return target;
+    const juce::File resolved (juce::String::fromUTF8 (real));
+    std::free (real);
+    return resolved;
 }
 
 juce::String cannotCreateTemporary (const juce::File& target)
@@ -170,15 +194,9 @@ namespace
         return muxer.finish() ? juce::String() : muxer.error();
     }
 
-    juce::String metadataOf (const AVDictionary* dictionary, const char* key)
-    {
-        const auto* entry = av_dict_get (dictionary, key, nullptr, 0);
-        return entry != nullptr ? juce::String::fromUTF8 (entry->value) : juce::String();
-    }
-
     juce::String checkTrack (const AVStream& stream, size_t i)
     {
-        if (metadataOf (stream.metadata, "title") != trackNames[i])
+        if (av::metadata (stream.metadata, "title") != trackNames[i])
             return "track " + juce::String (i + 1) + " is not named " + trackNames[i];
         if (((stream.disposition & AV_DISPOSITION_DEFAULT) != 0) != (i == 0))
             return trackNames[i] + " has the wrong default flag";
@@ -210,8 +228,29 @@ namespace
             return lossyCopyAdvice (*copiedCodec, counted[0], frames);
         for (size_t i = 0; i < counted.size(); ++i)
             if (counted[i] != frames)
-                return trackNames[i] + " was written " + juce::String (counted[i]) + " frames long, not "
+                return trackNames[i] + " is " + juce::String (counted[i]) + " frames long, not "
                        + juce::String (frames);
+        return {};
+    }
+
+    // Five named audio tracks in order, flagged and coded as written; `json` is the a3t.json stream, if any.
+    juce::String checkStreams (const AVFormatContext& format, const AVStream*& json)
+    {
+        std::vector<const AVStream*> audio;
+        json = nullptr;
+        for (unsigned i = 0; i < format.nb_streams; ++i)
+        {
+            const auto* stream = format.streams[i];
+            if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+                audio.push_back (stream);
+            else if (av::metadata (stream->metadata, "filename") == "a3t.json")
+                json = stream;
+        }
+        if (audio.size() != (size_t) numTracks)
+            return "the file has " + juce::String ((int) audio.size()) + " audio tracks, not 5";
+        for (size_t i = 0; i < audio.size(); ++i)
+            if (const auto error = checkTrack (*audio[i], i); error.isNotEmpty())
+                return error;
         return {};
     }
 
@@ -222,25 +261,48 @@ namespace
         const auto format = av::openFormat (file);
         if (format == nullptr)
             return "the written file cannot be opened";
-        std::vector<const AVStream*> audio;
         const AVStream* json = nullptr;
-        for (unsigned i = 0; i < format->nb_streams; ++i)
-        {
-            const auto* stream = format->streams[i];
-            if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
-                audio.push_back (stream);
-            else if (metadataOf (stream->metadata, "filename") == "a3t.json")
-                json = stream;
-        }
-        if (audio.size() != (size_t) numTracks)
-            return "the written file has " + juce::String ((int) audio.size()) + " audio tracks, not 5";
-        for (size_t i = 0; i < audio.size(); ++i)
-            if (const auto error = checkTrack (*audio[i], i); error.isNotEmpty())
-                return error;
+        if (const auto error = checkStreams (*format, json); error.isNotEmpty())
+            return error;
         if (const auto error = checkJson (json, data); error.isNotEmpty())
             return error;
         return checkLengths (file, frames, copiedCodec);
     }
+
+    juce::String checkStoredJson (const AVStream* stream)
+    {
+        if (stream == nullptr)
+            return "a3t.json is missing";
+        const auto& p = *stream->codecpar;
+        switch (parse (juce::String::fromUTF8 ((const char*) p.extradata, p.extradata_size)).status)
+        {
+            case Status::ok:    return {};
+            case Status::newer: return "a3t.json is from a newer version of the format";
+            default:            return "a3t.json does not parse";
+        }
+    }
+}
+
+WriteResult verifyExisting (const juce::File& file)
+{
+    const auto format = av::openFormat (file);
+    if (format == nullptr)
+        return failure ("not a readable Matroska file: " + file.getFullPathName());
+    const AVStream* json = nullptr;
+    if (const auto error = checkStreams (*format, json); error.isNotEmpty())
+        return failure (error);
+    if (const auto error = checkStoredJson (json); error.isNotEmpty())
+        return failure (error);
+    const auto frames = countFrames (file, 0);
+    if (! frames)
+        return failure ("the original cannot be decoded");
+    if (const auto error = checkLengths (file, *frames, std::nullopt); error.isNotEmpty())
+        return failure (error);
+    return { true, {} };
+}
+
+namespace
+{
 }
 
 WriteResult writeVerified (TemporaryFile& temporary, const juce::File& target, Sources& sources, const A3tData& data,

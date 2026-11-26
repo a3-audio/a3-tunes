@@ -31,12 +31,6 @@ namespace
         return {};
     }
 
-    juce::String metadataOf (const AVDictionary* dictionary, const char* key)
-    {
-        const auto* entry = av_dict_get (dictionary, key, nullptr, 0);
-        return entry != nullptr ? juce::String::fromUTF8 (entry->value) : juce::String();
-    }
-
     // libav hands an image attachment (the cover) out as a picture stream, anything else as extradata.
     juce::MemoryBlock attachedBytes (const AVStream& stream)
     {
@@ -58,11 +52,11 @@ namespace
             const auto& stream = *format->streams[i];
             if (stream.codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
                 continue;
-            const auto filename = metadataOf (stream.metadata, "filename");
+            const auto filename = av::metadata (stream.metadata, "filename");
             if (filename.isEmpty())
                 return "stream " + juce::String (i) + " is neither audio nor an attachment; a rewrite would drop it";
             if (filename != "a3t.json")
-                attachments.push_back ({ filename, metadataOf (stream.metadata, "mimetype"), attachedBytes (stream) });
+                attachments.push_back ({ filename, av::metadata (stream.metadata, "mimetype"), attachedBytes (stream) });
         }
         return {};
     }
@@ -94,8 +88,9 @@ namespace
     }
 }
 
-WriteResult rewriteMetadata (const juce::File& a3mkv, const A3tData& data)
+WriteResult rewriteMetadata (const juce::File& given, const A3tData& data)
 {
+    const auto a3mkv = resolvedTarget (given);
     const auto existing = openTrack (a3mkv);
     if (const auto error = checkRewritable (existing, data); error.isNotEmpty())
         return failure ("cannot rewrite " + a3mkv.getFullPathName() + ": " + error);

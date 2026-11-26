@@ -10,6 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 using namespace a3t;
 
 namespace
@@ -561,4 +564,27 @@ TEST (Writer, MoreEventsThanTheCapAreRefused)
 
     r.data.events = resetposEvents (maxEvents);
     EXPECT_TRUE (writeTrack (r).ok);
+}
+
+// Writing over an existing output through a link replaces what the link points to, not the link.
+TEST (Writer, WritingOverASymlinkKeepsTheLinkAndTheMode)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    const auto real = t.dir.getChildFile ("real.a3mkv");
+    real.replaceWithText ("old");
+    ASSERT_EQ (::chmod (real.getFullPathName().toRawUTF8(), 0640), 0);
+    const auto linkDir = t.dir.getChildFile ("links");
+    ASSERT_TRUE (linkDir.createDirectory());
+    r.output = linkDir.getChildFile ("song.a3mkv");
+    ASSERT_EQ (::symlink (real.getFullPathName().toRawUTF8(), r.output.getFullPathName().toRawUTF8()), 0);
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_TRUE (r.output.isSymbolicLink());
+    EXPECT_EQ (audioStreamsOf (real).size(), 5u);
+    struct stat st {};
+    ASSERT_EQ (::stat (real.getFullPathName().toRawUTF8(), &st), 0);
+    EXPECT_EQ (st.st_mode & 07777, 0640u);
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+    EXPECT_TRUE (noTemporaryIn (linkDir));
 }

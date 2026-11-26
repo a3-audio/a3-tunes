@@ -603,3 +603,24 @@ TEST (Cli, MergeTakesTheRigsStems)
     EXPECT_EQ (openTrack (file).data.stems[0].label, "Drums");
     EXPECT_FALSE (side.exists());
 }
+
+// verify checks what the writer's own verification checks, not only lengths.
+TEST (Cli, VerifyFailsOnMisnamedOrNonFlacStems)
+{
+    {
+        TempDir t;
+        const auto file = handBuiltPcmFile (t.dir, { "Original", "Stem 1", "Stem 2", "Stem 3", "Stem 4" },
+                                            "11111111-2222-3333-4444-555555555555");
+        const auto r = run (t, { "verify", path (file) });
+        EXPECT_EQ (r.exitCode, 2);
+        EXPECT_TRUE (r.err.contains ("Stem 1 is not FLAC")) << r.err;
+    }
+    {
+        TempDir t;
+        const auto file = handBuiltPcmFile (t.dir, { "Original", "Drums", "Stem 2", "Stem 3", "Stem 4" },
+                                            "11111111-2222-3333-4444-555555555555");
+        const auto r = run (t, { "verify", path (file) });
+        EXPECT_EQ (r.exitCode, 2);
+        EXPECT_TRUE (r.err.contains ("track 2 is not named Stem 1")) << r.err;
+    }
+}

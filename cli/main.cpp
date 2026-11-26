@@ -264,19 +264,8 @@ namespace
         const auto opened = a3t::openTrack (file);
         if (opened.status != a3t::Status::ok)
             return failure (whyNotOpened (opened));
-        if (! opened.layout.isFiveTrack)
-            return failure ("expected 5 audio tracks, found " + juce::String (opened.layout.audioTracks));
-
-        for (int track = 0; track < 1 + a3t::numStems; ++track)
-        {
-            const auto frames = a3t::countFrames (file, track);
-            if (! frames.has_value())
-                return failure ("audio track " + juce::String (track + 1) + " cannot be decoded");
-            if (*frames != opened.layout.lengthFrames)
-                return failure ("audio track " + juce::String (track + 1) + " has " + juce::String (*frames)
-                                + " frames, the original has " + juce::String (opened.layout.lengthFrames));
-        }
-        return exitOk;
+        const auto checked = a3t::verifyTrack (file);
+        return checked.ok ? exitOk : failure (checked.error);
     }
 
     // --- merge ----------------------------------------------------------------------------------

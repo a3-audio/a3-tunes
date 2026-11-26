@@ -7,6 +7,8 @@
 #include "a3t/Audio.h"
 #include "a3t/Writer.h"
 
+#include <sys/stat.h>
+
 #include <array>
 #include <memory>
 #include <optional>
@@ -37,15 +39,20 @@ public:
 
     bool exists() const { return created; }
     const juce::File& path() const { return file; }
-    // Flushed to disk, then renamed over target in one step; an error text, or empty.
+    // Flushed to disk, then renamed over target in one step; an error text, or empty. An existing
+    // target's mode (and, where permitted, owner) is given to the temporary first, so it survives.
     juce::String moveTo (const juce::File& target);
 
 private:
-    bool flushToDisk() const;
+    bool flushToDisk (const struct stat* keep) const;
 
     juce::File file;
     bool created = false;
 };
+
+// What a write replaces: the file a symlink points to (so the link stays a link and the temporary sits
+// beside the real file), or the path itself when it does not exist yet.
+juce::File resolvedTarget (const juce::File&);
 
 // The error for a TemporaryFile that does not exist, while errno still says why.
 juce::String cannotCreateTemporary (const juce::File& target);
@@ -62,6 +69,9 @@ juce::String lossyCopyAdvice (const juce::String& codec, juce::int64 copiedFrame
 WriteResult writeVerified (TemporaryFile& temporary, const juce::File& target, Sources&, const A3tData& data,
                            const std::vector<Attachment>& attachments, juce::int64 frames, int rate,
                            const std::optional<juce::String>& copiedCodec);
+
+// verifyTrack's checks (see Writer.h), sharing the steps of writeVerified's verification.
+WriteResult verifyExisting (const juce::File&);
 
 WriteResult failure (const juce::String& error);
 }

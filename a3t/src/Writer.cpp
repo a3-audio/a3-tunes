@@ -154,14 +154,20 @@ namespace
     }
 }
 
+WriteResult verifyTrack (const juce::File& file)
+{
+    return verifyExisting (file);
+}
+
 WriteResult writeTrack (const WriteRequest& request)
 {
     if (const auto error = checkRequest (request); error.isNotEmpty())
         return failure (error);
+    const auto output = resolvedTarget (request.output);
     // First, so that it is cleaned up whatever fails after it.
-    TemporaryFile temporary (request.output);
+    TemporaryFile temporary (output);
     if (! temporary.exists())
-        return failure (cannotCreateTemporary (request.output));
+        return failure (cannotCreateTemporary (output));
 
     Inputs inputs;
     if (const auto error = readInputs (request, inputs); error.isNotEmpty())
@@ -183,6 +189,6 @@ WriteResult writeTrack (const WriteRequest& request)
     const auto data = withFileFacts (request.data, inputs[0]);
 
     const auto copiedCodec = request.convert.keep ? std::optional<juce::String> (inputs[0].info.codecName) : std::nullopt;
-    return writeVerified (temporary, request.output, sources, data, attachments, frames, rate, copiedCodec);
+    return writeVerified (temporary, output, sources, data, attachments, frames, rate, copiedCodec);
 }
 }

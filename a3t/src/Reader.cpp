@@ -27,9 +27,8 @@ namespace a3t
             for (unsigned i = 0; i < format.nb_streams; ++i)
             {
                 const auto& stream = *format.streams[i];
-                const auto* name = av_dict_get (stream.metadata, "filename", nullptr, 0);
-                if (stream.codecpar->codec_type != AVMEDIA_TYPE_ATTACHMENT || name == nullptr
-                    || juce::String (name->value) != "a3t.json")
+                if (stream.codecpar->codec_type != AVMEDIA_TYPE_ATTACHMENT
+                    || av::metadata (stream.metadata, "filename") != "a3t.json")
                     continue;
                 const auto& p = *stream.codecpar;
                 return juce::String::fromUTF8 ((const char*) p.extradata, p.extradata_size);

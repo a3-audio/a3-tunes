@@ -295,3 +295,35 @@ TEST (Rewrite, GridSegmentsSurviveARewrite)
     const auto text = serialise (dataOf (r.output));
     EXPECT_TRUE (juce::JSON::parse (text)["analysis"]["grid"]["segments"].isArray()) << text;
 }
+
+TEST (Rewrite, RewriteThroughASymlinkUpdatesTheRealFile)
+{
+    TempDir t;
+    const auto r = written (t);
+    const auto linkDir = t.dir.getChildFile ("links");
+    ASSERT_TRUE (linkDir.createDirectory());
+    const auto link = linkDir.getChildFile ("song.a3mkv");
+    ASSERT_EQ (::symlink (r.output.getFullPathName().toRawUTF8(), link.getFullPathName().toRawUTF8()), 0);
+
+    auto data = dataOf (link);
+    data.revision = 9;
+    const auto result = rewriteMetadata (link, data);
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_TRUE (link.isSymbolicLink());
+    EXPECT_EQ (dataOf (r.output).revision, 9);
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+    EXPECT_TRUE (noTemporaryIn (linkDir));
+}
+
+TEST (Rewrite, RewriteKeepsTheFileMode)
+{
+    TempDir t;
+    const auto r = written (t);
+    ASSERT_EQ (::chmod (r.output.getFullPathName().toRawUTF8(), 0640), 0);
+    auto data = dataOf (r.output);
+    data.revision = 9;
+    ASSERT_TRUE (rewriteMetadata (r.output, data).ok);
+    struct stat st {};
+    ASSERT_EQ (::stat (r.output.getFullPathName().toRawUTF8(), &st), 0);
+    EXPECT_EQ (st.st_mode & 07777, 0640u);
+}
