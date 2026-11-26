@@ -36,6 +36,14 @@ namespace a3t
         juce::String error;
     };
 
-    // Writes <output>.tmp, verifies it, then renames it over output; on any failure output is untouched.
+    // Writes a unique temporary beside output, verifies it, then renames it over output; on any failure
+    // output is untouched and the temporary is gone.
     WriteResult writeTrack (const WriteRequest&);
+
+    // Replaces the a3t.json attachment (and the tags and chapters derived from it) of an existing .a3mkv.
+    // All five audio tracks and a cover attachment are copied as packets, bit for bit; the file is written to a
+    // unique temporary beside it, verified as in writeTrack, and renamed over the original.
+    // Refused, with the file untouched, unless it opens as status ok with five tracks and data.uuid is its uuid.
+    // data.track.audio is the file's (taken from it, not from data); data.revision is stored as given.
+    WriteResult rewriteMetadata (const juce::File& a3mkv, const A3tData& data);
 }

@@ -3,6 +3,7 @@
 #include "a3t/Model.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace a3t
 {
@@ -141,5 +142,14 @@ namespace a3t
             && sameAll (a.cues, b.cues) && sameAll (a.loops, b.loops)
             && sameAll (a.phrases, b.phrases) && sameAll (a.events, b.events)
             && same (a.extra, b.extra);
+    }
+
+    juce::int64 lengthFramesAt (const AudioInfo& audio, int sampleRate)
+    {
+        if (audio.sampleRate <= 0 || audio.lengthSeconds <= 0.0 || sampleRate <= 0)
+            return 0;
+        const auto sourceFrames = (juce::int64) std::llround (audio.lengthSeconds * audio.sampleRate);
+        // av_rescale_rnd with AV_ROUND_NEAR_INF, for a positive count; Model stays free of libav.
+        return (sourceFrames * sampleRate + audio.sampleRate / 2) / audio.sampleRate;
     }
 }

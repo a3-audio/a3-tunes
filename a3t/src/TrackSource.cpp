@@ -32,12 +32,12 @@ namespace
     class PacketCopy final : public TrackSource
     {
     public:
-        bool init (const juce::File& file)
+        bool init (const juce::File& file, int audioTrack)
         {
             format = av::openFormat (file);
             if (format == nullptr || packet == nullptr)
                 return false;
-            index = av::audioStreamIndex (*format, 0);
+            index = av::audioStreamIndex (*format, audioTrack);
             if (index < 0)
                 return false;
             for (unsigned i = 0; i < format->nb_streams; ++i)
@@ -277,10 +277,10 @@ namespace
     }
 }
 
-std::unique_ptr<TrackSource> copyPackets (const juce::File& file)
+std::unique_ptr<TrackSource> copyPackets (const juce::File& file, int audioTrack)
 {
     auto source = std::make_unique<PacketCopy>();
-    return source->init (file) ? std::move (source) : nullptr;
+    return source->init (file, audioTrack) ? std::move (source) : nullptr;
 }
 
 std::unique_ptr<TrackSource> encodeFlac (const juce::File& file, int sampleRate, int bitDepth, juce::int64 frames)

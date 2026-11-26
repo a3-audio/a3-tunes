@@ -45,16 +45,6 @@ namespace a3t
             return count;
         }
 
-        // The writer records the original's length as seconds at the original's rate, which round-trips
-        // to the exact frame count; a converted file's tracks are that length rescaled, as the writer does.
-        juce::int64 framesFromJson (const AudioInfo& audio, int streamRate)
-        {
-            if (audio.sampleRate <= 0 || audio.lengthSeconds <= 0.0 || streamRate <= 0)
-                return 0;
-            const auto sourceFrames = (juce::int64) std::llround (audio.lengthSeconds * audio.sampleRate);
-            return av_rescale_rnd (sourceFrames, streamRate, audio.sampleRate, AV_ROUND_NEAR_INF);
-        }
-
         // a3t.json's number is trusted only if it agrees with the container's own (millisecond) duration.
         bool agreesWithContainer (juce::int64 frames, juce::int64 declared, int rate)
         {
@@ -67,7 +57,7 @@ namespace a3t
             const auto rate = stream.codecpar->sample_rate;
             if (data != nullptr)
             {
-                const auto fromJson = framesFromJson (data->track.audio, rate);
+                const auto fromJson = lengthFramesAt (data->track.audio, rate);
                 if (agreesWithContainer (fromJson, declaredLength (format, stream), rate))
                     return fromJson;
             }

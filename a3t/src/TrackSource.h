@@ -23,8 +23,8 @@ protected:
     bool broken = false;
 };
 
-// The first audio stream's packets, unchanged; nullptr if the file cannot be read.
-std::unique_ptr<TrackSource> copyPackets (const juce::File&);
+// The audioTrack-th audio stream's packets, unchanged; nullptr if the file cannot be read.
+std::unique_ptr<TrackSource> copyPackets (const juce::File&, int audioTrack = 0);
 
 // The first audio stream decoded, converted to `sampleRate` and `bitDepth` (16 or 24) and encoded
 // to FLAC, exactly `frames` long (cut or padded with silence); nullptr if it cannot be set up.

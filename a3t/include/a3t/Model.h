@@ -106,6 +106,10 @@ namespace a3t
         juce::var extra;   // unknown top-level keys
     };
 
+    // The writer records the original's length as seconds at its own rate, which round-trips to the exact
+    // frame count; this is that count at sampleRate, rescaled as the writer does. 0 without a record.
+    juce::int64 lengthFramesAt (const AudioInfo&, int sampleRate);
+
     juce::String newUuid();   // random, lower-case, 8-4-4-4-12
     // The one order every section is kept in: cues by (time, hot < memory < load, slot),
     // loops by (in, slot), phrases by start, events as EventList sorts them. Stable.

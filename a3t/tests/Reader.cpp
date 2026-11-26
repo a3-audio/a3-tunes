@@ -6,6 +6,7 @@
 #include "MkvMuxer.h"
 #include "TrackSource.h"
 #include "TestAudio.h"
+#include "TestMkv.h"
 
 #include <gtest/gtest.h>
 
@@ -63,20 +64,6 @@ namespace
         }
         EXPECT_TRUE (muxer.finish());
         return out;
-    }
-
-    // a3t.json sits in the file as plain text, so a same-length replacement edits it in place.
-    void patchBytes (const juce::File& file, const juce::String& from, const juce::String& to)
-    {
-        ASSERT_EQ (from.length(), to.length());
-        juce::MemoryBlock bytes;
-        ASSERT_TRUE (file.loadFileAsData (bytes));
-        const auto needle = from.toStdString();
-        const std::string text ((const char*) bytes.getData(), bytes.getSize());
-        const auto at = text.find (needle);
-        ASSERT_NE (at, std::string::npos);
-        bytes.copyFrom (to.toRawUTF8(), (int) at, (size_t) to.getNumBytesAsUTF8());
-        ASSERT_TRUE (file.replaceWithData (bytes.getData(), bytes.getSize()));
     }
 
     Sidecar sidecarFor (const juce::String& uuid, int rating)

@@ -6,6 +6,7 @@
 #include "AvPtr.h"
 #include "WriterTesting.h"
 #include "TestAudio.h"
+#include "TestMkv.h"
 
 #include <gtest/gtest.h>
 
@@ -13,8 +14,6 @@ using namespace a3t;
 
 namespace
 {
-    using Channels = std::vector<std::vector<float>>;
-
     constexpr std::array<double, numStems> stemFrequencies { 220.0, 330.0, 550.0, 770.0 };
 
     // Five WAVs of equal length; the stems are sines at different pitches so a swap would show.
@@ -29,118 +28,6 @@ namespace
         r.data.track.title = "Test Title";
         r.output = t.dir.getChildFile (outputName);
         return r;
-    }
-
-    // The writer's temporary files are <output>.<random>.a3tmp beside the output.
-    bool noTemporaryIn (const juce::File& dir)
-    {
-        return dir.findChildFiles (juce::File::findFiles, false, "*.a3tmp").isEmpty();
-    }
-
-    Channels decodeAll (const juce::File& file, int track)
-    {
-        const auto d = TrackDecoder::open (file, track);
-        if (d == nullptr)
-            return {};
-        Channels all ((size_t) d->channels());
-        Channels block ((size_t) d->channels(), std::vector<float> (1000));
-        std::vector<float*> planes;
-        for (auto& b : block)
-            planes.push_back (b.data());
-        for (int n; (n = d->read (planes.data(), 1000)) > 0;)
-            for (size_t c = 0; c < all.size(); ++c)
-                all[c].insert (all[c].end(), block[c].begin(), block[c].begin() + n);
-        return all;
-    }
-
-    struct StreamView
-    {
-        AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
-        std::string codec, title, filename, mimetype, bytes;
-        bool isDefault = false;
-    };
-
-    std::string metadata (const AVDictionary* dict, const char* key)
-    {
-        const auto* entry = av_dict_get (dict, key, nullptr, 0);
-        return entry != nullptr ? entry->value : "";
-    }
-
-    std::vector<StreamView> streamsOf (const juce::File& file)
-    {
-        const auto format = av::openFormat (file);
-        std::vector<StreamView> views;
-        if (format == nullptr)
-            return views;
-        for (unsigned i = 0; i < format->nb_streams; ++i)
-        {
-            const auto& s = *format->streams[i];
-            StreamView v;
-            v.type = s.codecpar->codec_type;
-            v.codec = avcodec_get_name (s.codecpar->codec_id);
-            v.title = metadata (s.metadata, "title");
-            v.filename = metadata (s.metadata, "filename");
-            v.mimetype = metadata (s.metadata, "mimetype");
-            v.isDefault = (s.disposition & AV_DISPOSITION_DEFAULT) != 0;
-            if (s.codecpar->extradata_size > 0)
-                v.bytes.assign ((const char*) s.codecpar->extradata, (size_t) s.codecpar->extradata_size);
-            else if (s.attached_pic.size > 0)
-                v.bytes.assign ((const char*) s.attached_pic.data, (size_t) s.attached_pic.size);
-            views.push_back (std::move (v));
-        }
-        return views;
-    }
-
-    std::vector<StreamView> audioStreamsOf (const juce::File& file)
-    {
-        std::vector<StreamView> audio;
-        for (auto& v : streamsOf (file))
-            if (v.type == AVMEDIA_TYPE_AUDIO)
-                audio.push_back (v);
-        return audio;
-    }
-
-    const StreamView* attachmentNamed (const std::vector<StreamView>& streams, const std::string& name)
-    {
-        for (const auto& v : streams)
-            if (v.filename == name)
-                return &v;
-        return nullptr;
-    }
-
-    // The first `count` packets of one audio track, as raw bytes.
-    std::vector<std::string> packetsOf (const juce::File& file, int track, int count)
-    {
-        const auto format = av::openFormat (file);
-        std::vector<std::string> packets;
-        if (format == nullptr)
-            return packets;
-        const auto index = av::audioStreamIndex (*format, track);
-        av::Packet packet { av_packet_alloc() };
-        while ((int) packets.size() < count && av_read_frame (format.get(), packet.get()) >= 0)
-        {
-            if (packet->stream_index == index)
-                packets.emplace_back ((const char*) packet->data, (size_t) packet->size);
-            av_packet_unref (packet.get());
-        }
-        return packets;
-    }
-
-    juce::MemoryBlock bytesOf (const juce::File& f)
-    {
-        juce::MemoryBlock block;
-        f.loadFileAsData (block);
-        return block;
-    }
-
-    Cue hotCue (int slot, double time, const char* name)
-    {
-        Cue c;
-        c.kind = Cue::Kind::hot;
-        c.slot = slot;
-        c.time = time;
-        c.name = name;
-        return c;
     }
 
     // The 330 Hz test sine into an interleaved S32 or S16, or a planar float, stereo frame.
@@ -252,14 +139,6 @@ namespace
             return {};
         return encodeSine (dir.getChildFile (name), "mp3", *encoder, frames);
     }
-
-    constexpr unsigned char tinyPng[] = {
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00,
-        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00,
-        0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01,
-        0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
-        0x82
-    };
 }
 
 TEST (Writer, WritesFiveAudioTracksInOrder)
@@ -544,31 +423,9 @@ TEST (Writer, FlacStemsSeekSampleExactly)
     TempDir t;
     const auto r = requestFor (t, 44100, 24, 30000);
     ASSERT_TRUE (writeTrack (r).ok);
-    const auto straight = decodeAll (r.output, 1);
-    ASSERT_EQ (straight.size(), 2u);
-    ASSERT_EQ (straight[0].size(), 30000u);
-
     // 3968 is one frame before a block that starts at exactly 90 ms; 29990 lies past Matroska's
     // millisecond-rounded duration (29988 frames) but inside the audio.
-    for (const juce::int64 frame : { 1, 3968, 3969, 7777, 29990, 30000 })
-    {
-        auto d = TrackDecoder::open (r.output, 1);
-        ASSERT_NE (d, nullptr);
-        ASSERT_TRUE (d->seek (frame)) << frame;
-        std::vector<float> left (64), right (64);
-        float* planes[] = { left.data(), right.data() };
-        const auto n = d->read (planes, 64);
-        ASSERT_EQ (n, (int) std::min<juce::int64> (64, 30000 - frame)) << frame;
-        ASSERT_FALSE (d->failed());
-        for (int i = 0; i < n; ++i)
-        {
-            EXPECT_EQ (left[(size_t) i], straight[0][(size_t) (frame + i)]) << frame << "+" << i;
-            EXPECT_EQ (right[(size_t) i], straight[1][(size_t) (frame + i)]) << frame << "+" << i;
-        }
-    }
-    auto d = TrackDecoder::open (r.output, 1);
-    ASSERT_NE (d, nullptr);
-    EXPECT_FALSE (d->seek (30001));
+    expectSampleExactSeeks (r.output, 1, 30000, { 1, 3968, 3969, 7777, 29990, 30000 });
 }
 
 TEST (Writer, AFlacStemWithMillisecondBlocksIsCopied)
