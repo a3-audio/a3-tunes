@@ -20,10 +20,13 @@ namespace
     };
 
     // stderr goes to a file so it stays apart from stdout (ChildProcess would merge them).
-    Run run (const TempDir& t, const juce::StringArray& args)
+    // `inDir`: run with that working directory, so relative paths are the CLI's to resolve.
+    Run runWith (const TempDir& t, const juce::StringArray& args, bool inDir)
     {
         const auto errFile = t.dir.getChildFile ("stderr.txt");
-        juce::StringArray command { "/bin/sh", "-c", "err=$1; shift; exec \"$@\" 2>\"$err\"", "sh",
+        const juce::String script = inDir ? "cd \"$1\" && err=$2 && shift 2 && exec \"$@\" 2>\"$err\""
+                                          : "err=$2; shift 2; exec \"$@\" 2>\"$err\"";
+        juce::StringArray command { "/bin/sh", "-c", script, "sh", t.dir.getFullPathName(),
                                     errFile.getFullPathName(), A3T_CLI_PATH };
         command.addArray (args);
         juce::ChildProcess child;
@@ -36,6 +39,9 @@ namespace
         result.err = errFile.loadFileAsString();
         return result;
     }
+
+    Run run (const TempDir& t, const juce::StringArray& args) { return runWith (t, args, false); }
+    Run runIn (const TempDir& t, const juce::StringArray& args) { return runWith (t, args, true); }
 
     juce::String path (const juce::File& f) { return f.getFullPathName(); }
 
@@ -623,4 +629,63 @@ TEST (Cli, VerifyFailsOnMisnamedOrNonFlacStems)
         EXPECT_EQ (r.exitCode, 2);
         EXPECT_TRUE (r.err.contains ("track 2 is not named Stem 1")) << r.err;
     }
+}
+
+// A copy cut off at 60% (a stick pulled mid-copy): nothing crashes and verify says it is broken.
+TEST (Cli, ATruncatedFileFailsVerifyAndDoesNotCrash)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto whole = bytesOf (file);
+    const auto cut = t.dir.getChildFile ("cut.a3mkv");
+    ASSERT_TRUE (cut.replaceWithData (whole.getData(), whole.getSize() * 6 / 10));
+    const auto opened = openTrack (cut);
+    juce::ignoreUnused (opened);   // any status; reaching this line is the point
+    const auto r = run (t, { "verify", path (cut) });
+    EXPECT_EQ (r.exitCode, 2) << r.err;
+    EXPECT_FALSE (r.err.isEmpty());
+    EXPECT_NE (run (t, { "info", path (cut) }).exitCode, 139);
+}
+
+namespace
+{
+    // build, info, verify and merge on `name`, relative to the working directory `t.dir`.
+    void roundTripUnder (const TempDir& t, const juce::String& name)
+    {
+        const auto file = t.dir.getChildFile (name);
+        auto args = buildArgs (t, file);
+        args.set (args.indexOf ("--out") + 1, name);   // as typed, so the CLI resolves it
+        const auto b = runIn (t, args);
+        ASSERT_EQ (b.exitCode, 0) << name << ": " << b.err;
+        ASSERT_TRUE (file.existsAsFile()) << name;
+        EXPECT_EQ (runIn (t, { "info", name }).exitCode, 0) << name;
+        EXPECT_EQ (runIn (t, { "verify", name }).exitCode, 0) << name;
+        const auto side = rigRated (file, 4);
+        const auto m = runIn (t, { "merge", name, "--take", "all" });
+        EXPECT_EQ (m.exitCode, 0) << name << ": " << m.err;
+        EXPECT_EQ (openTrack (file).data.track.rating, 4) << name;
+        EXPECT_FALSE (side.exists()) << name;
+    }
+}
+
+TEST (Cli, RoundTripWithSpacesUnicodeAndALeadingDash)
+{
+    TempDir t;
+    roundTripUnder (t, juce::String (juce::CharPointer_UTF8 ("\xc3\x9c" "ber Song \xe2\x80\x93 1.a3mkv")));
+    roundTripUnder (t, "./-dash.a3mkv");
+}
+
+TEST (Cli, SeekbenchCompareRefusesLooseStemsOfDifferentFormats)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto loose = t.dir.getChildFile ("loose");
+    loose.createDirectory();
+    for (int s = 1; s <= 4; ++s)
+        writeTestWav (loose, "stem" + juce::String (s) + ".flac", s == 3 ? 44100 : 48000, s == 4 ? 1 : 2, 16, 20000,
+                      220.0 * s);
+    const auto r = run (t, { "seekbench", path (file), "--seeks", "2", "--compare", path (loose) });
+    EXPECT_EQ (r.exitCode, 2);
+    EXPECT_TRUE (r.err.contains ("stem3.flac")) << r.err;
+    EXPECT_TRUE (r.err.contains ("44100")) << r.err;
 }

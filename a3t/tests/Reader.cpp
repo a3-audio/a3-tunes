@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <optional>
 
 using namespace a3t;
 
@@ -102,12 +103,21 @@ TEST (Reader, ListingNeedsNoDecoding)
         return r;
     }();
 
-    const auto start = std::chrono::steady_clock::now();
-    const auto opened = openTrack (request.output);
-    const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
+    // Relative to one decode of the same file, so a loaded machine slows both sides alike.
+    const auto millisecondsOf = [] (auto&& f)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        f();
+        return std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
+    };
+    OpenResult opened;
+    const auto listing = millisecondsOf ([&] { opened = openTrack (request.output); });
+    std::optional<juce::int64> counted;
+    const auto decoding = millisecondsOf ([&] { counted = countFrames (request.output, 0); });
     ASSERT_EQ (opened.status, Status::ok) << opened.error;
     EXPECT_EQ (opened.layout.lengthFrames, 8000 * 600);
-    EXPECT_LT (ms, 200.0);
+    EXPECT_EQ (counted, juce::int64 (8000 * 600));
+    EXPECT_LT (listing, decoding / 5.0) << "listing " << listing << " ms, decoding " << decoding << " ms";
 }
 
 TEST (Reader, FileWithoutA3tJsonIsDamagedButPlays)

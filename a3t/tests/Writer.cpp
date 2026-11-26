@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "a3t/Audio.h"
 #include "a3t/Json.h"
+#include "a3t/Reader.h"
 #include "a3t/Writer.h"
 #include "AvPtr.h"
 #include "WriterTesting.h"
@@ -509,27 +510,62 @@ TEST (Writer, VerificationRejectsACompleteFileAndGivesTheSameAdvice)
     EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
-TEST (Writer, AacAndMp2OriginalsAreStillKept)
+namespace
 {
-    for (const auto* name : { "aac", "mp2" })
+    // A keep-mode file whose original is the libav `name` encoder's (aac, mp2) output; ok on success.
+    WriteRequest keptLossyOriginal (const TempDir& t, const char* name)
     {
-        TempDir t;
         const auto* codec = avcodec_find_encoder_by_name (name);
-        ASSERT_NE (codec, nullptr) << name;
+        EXPECT_NE (codec, nullptr) << name;
+        if (codec == nullptr)
+            return {};
         av::Codec encoder { avcodec_alloc_context3 (codec) };
         encoder->sample_fmt = codec->id == AV_CODEC_ID_AAC ? AV_SAMPLE_FMT_FLTP : AV_SAMPLE_FMT_S16;
         encoder->sample_rate = 44100;
         encoder->time_base = { 1, 44100 };
         encoder->bit_rate = 192000;
         av_channel_layout_default (&encoder->ch_layout, 2);
-        ASSERT_GE (avcodec_open2 (encoder.get(), codec, nullptr), 0) << name;
+        EXPECT_GE (avcodec_open2 (encoder.get(), codec, nullptr), 0) << name;
         const auto original = encodeSine (t.dir.getChildFile (juce::String ("original.") + (codec->id == AV_CODEC_ID_AAC ? "m4a" : "mp2")),
                                           codec->id == AV_CODEC_ID_AAC ? "ipod" : "mp2", *encoder, 88200);
-        ASSERT_NE (original, juce::File()) << name;
+        EXPECT_NE (original, juce::File()) << name;
         auto r = requestFor (t, 44100, 16, countFrames (original).value_or (0));
         r.original = original;
         const auto result = writeTrack (r);
         EXPECT_TRUE (result.ok) << name << ": " << result.error;
+        return r;
+    }
+}
+
+TEST (Writer, AacAndMp2OriginalsAreStillKept)
+{
+    for (const auto* name : { "aac", "mp2" })
+    {
+        TempDir t;
+        keptLossyOriginal (t, name);
+    }
+}
+
+// rewriteMetadata copies a lossy original's packets too: same codec, same decoded samples.
+TEST (Writer, KeptAacAndMp2OriginalsSurviveARewrite)
+{
+    for (const auto* name : { "aac", "mp2" })
+    {
+        TempDir t;
+        const auto r = keptLossyOriginal (t, name);
+        ASSERT_TRUE (r.output.existsAsFile()) << name;
+        const auto codecBefore = audioStreamsOf (r.output)[0].codec;
+        const auto samplesBefore = decodeAll (r.output, 0);
+        const auto opened = openTrack (r.output);
+        ASSERT_EQ (opened.status, Status::ok) << name;
+        auto data = opened.data;
+        data.revision += 1;
+        data.track.comment = "rewritten";
+        const auto result = rewriteMetadata (r.output, data);
+        ASSERT_TRUE (result.ok) << name << ": " << result.error;
+        EXPECT_EQ (audioStreamsOf (r.output)[0].codec, codecBefore) << name;
+        EXPECT_EQ (decodeAll (r.output, 0), samplesBefore) << name;
+        EXPECT_EQ (openTrack (r.output).data.track.comment, "rewritten") << name;
     }
 }
 
