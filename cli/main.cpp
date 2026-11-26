@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Raphael Eismann
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "a3t/Audio.h"
+#include "a3t/Bench.h"
 #include "a3t/Json.h"
 #include "a3t/Merge.h"
 #include "a3t/Reader.h"
@@ -9,9 +10,15 @@
 
 #include <juce_core/juce_core.h>
 
+#include <chrono>
+#include <cstdio>
 #include <iostream>
+#include <random>
 #include <map>
+#include <memory>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace
 {
@@ -23,7 +30,8 @@ namespace
         "             [--meta meta.json] [--cover F] [--convert RATE/DEPTH]\n"
         "  a3t info   FILE\n"
         "  a3t verify FILE\n"
-        "  a3t merge  FILE --take all|none|KEY[,KEY...] [--list]\n";
+        "  a3t merge  FILE --take all|none|KEY[,KEY...] [--list]\n"
+        "  a3t seekbench FILE [--seeks N] [--compare DIR]\n";
 
     // Relative paths are the shell's, so they resolve against the working directory.
     juce::File fileArg (const juce::String& path)
@@ -407,6 +415,167 @@ namespace
             return failure ("merged, but the sidecar could not be removed: " + in.sidecarFile.getFullPathName());
         return exitOk;
     }
+
+    // --- seekbench ------------------------------------------------------------------------------
+
+    constexpr int defaultSeeks = 100, maxSeeks = 100000;
+    constexpr unsigned randomSeed = 1;   // fixed, so two runs (or two sticks) draw the same positions
+
+    using Decoders = std::vector<std::unique_ptr<a3t::TrackDecoder>>;
+
+    struct SeekRun
+    {
+        std::vector<double> milliseconds;
+        double bytesPerAudioSecond = -1.0;   // negative: the byte count is not available
+    };
+
+    // Bytes the process has read so far (Linux); nullopt where /proc/self/io is not there.
+    std::optional<juce::int64> bytesReadByProcess()
+    {
+        std::FILE* f = std::fopen ("/proc/self/io", "r");
+        if (f == nullptr)
+            return std::nullopt;
+        char key[64];
+        long long value;
+        std::optional<juce::int64> rchar;
+        while (std::fscanf (f, "%63s %lld", key, &value) == 2)
+            if (juce::String (key) == "rchar:")
+                rchar = (juce::int64) value;
+        std::fclose (f);
+        return rchar;
+    }
+
+    // Reads up to one second; false when the decoder failed.
+    bool readOneSecond (a3t::TrackDecoder& decoder, juce::int64& framesRead)
+    {
+        std::vector<std::vector<float>> block ((size_t) decoder.channels(), std::vector<float> (4096));
+        std::vector<float*> planes;
+        for (auto& plane : block)
+            planes.push_back (plane.data());
+        framesRead = 0;
+        for (int n; framesRead < decoder.sampleRate() && (n = decoder.read (planes.data(), 4096)) > 0;)
+            framesRead += n;
+        return ! decoder.failed();
+    }
+
+    // What StemDeck does on a hot cue: all stems seek to one frame, then read one second.
+    // The bytes figure is bytes read per second of music (the stems are read together).
+    bool measureSeeks (Decoders& decoders, juce::int64 lengthFrames, int seeks, SeekRun& run, juce::String& error)
+    {
+        std::mt19937_64 random (randomSeed);
+        const auto rate = decoders.front()->sampleRate();
+        std::uniform_int_distribution<juce::int64> pick (0, std::max<juce::int64> (0, lengthFrames - rate));
+        const auto bytesBefore = bytesReadByProcess();
+        double audioSeconds = 0.0;
+        for (int i = 0; i < seeks; ++i)
+        {
+            const auto frame = pick (random);
+            const auto start = std::chrono::steady_clock::now();
+            juce::int64 firstStemFrames = 0;
+            for (auto& decoder : decoders)
+            {
+                juce::int64 framesRead = 0;
+                if (! decoder->seek (frame) || ! readOneSecond (*decoder, framesRead))
+                {
+                    error = "seeking to frame " + juce::String (frame) + " failed";
+                    return false;
+                }
+                if (&decoder == &decoders.front())
+                    firstStemFrames = framesRead;
+            }
+            const std::chrono::duration<double, std::milli> took = std::chrono::steady_clock::now() - start;
+            run.milliseconds.push_back (took.count());
+            audioSeconds += (double) firstStemFrames / rate;
+        }
+        const auto bytesAfter = bytesReadByProcess();
+        if (bytesBefore.has_value() && bytesAfter.has_value() && audioSeconds > 0.0)
+            run.bytesPerAudioSecond = (double) (*bytesAfter - *bytesBefore) / audioSeconds;
+        return true;
+    }
+
+    void printSeekRun (const SeekRun& run)
+    {
+        const auto stats = a3t::summarise (run.milliseconds);
+        std::cout << "seeks: " << run.milliseconds.size() << "\n"
+                  << "median ms: " << juce::String (stats.median, 2) << "\n"
+                  << "p95 ms: " << juce::String (stats.p95, 2) << "\n"
+                  << "max ms: " << juce::String (stats.max, 2) << "\n"
+                  << "bytes read per second of audio: "
+                  << (run.bytesPerAudioSecond < 0.0 ? juce::String ("n/a") : juce::String (run.bytesPerAudioSecond, 2))
+                  << "\n";
+    }
+
+    // The four stems of an .a3mkv are audio tracks 1..4 (0 is the original).
+    int seekbenchStems (const juce::File& file, int seeks, SeekRun& run, juce::String& error)
+    {
+        const auto opened = a3t::openTrack (file);
+        if (opened.status != a3t::Status::ok || ! opened.layout.isFiveTrack)
+        {
+            error = opened.status != a3t::Status::ok ? whyNotOpened (opened)
+                                                     : "expected 5 audio tracks, found " + juce::String (opened.layout.audioTracks);
+            return exitFailure;
+        }
+        Decoders decoders;
+        for (int stem = 1; stem <= a3t::numStems; ++stem)
+            decoders.push_back (a3t::TrackDecoder::open (file, stem));
+        for (const auto& d : decoders)
+            if (d == nullptr)
+            {
+                error = "a stem track cannot be opened";
+                return exitFailure;
+            }
+        return measureSeeks (decoders, opened.layout.lengthFrames, seeks, run, error) ? exitOk : exitFailure;
+    }
+
+    int seekbenchLoose (const juce::File& dir, int seeks, SeekRun& run, juce::String& error)
+    {
+        Decoders decoders;
+        juce::int64 length = std::numeric_limits<juce::int64>::max();
+        for (int stem = 1; stem <= a3t::numStems; ++stem)
+        {
+            const auto stemFile = dir.getChildFile ("stem" + juce::String (stem) + ".flac");
+            decoders.push_back (a3t::TrackDecoder::open (stemFile, 0));
+            if (decoders.back() == nullptr)
+            {
+                error = "cannot read " + stemFile.getFullPathName();
+                return exitFailure;
+            }
+            length = std::min (length, decoders.back()->lengthFrames());
+        }
+        return measureSeeks (decoders, length, seeks, run, error) ? exitOk : exitFailure;
+    }
+
+    int seekbench (const juce::StringArray& args)
+    {
+        const auto options = parseOptions (args, { "--seeks", "--compare" }, {});
+        if (options.error.isNotEmpty() || options.positional.size() != 1)
+            return usageError (options.error.isNotEmpty() ? options.error : "seekbench takes one FILE");
+
+        int seeks = defaultSeeks;
+        if (options.has ("--seeks"))
+        {
+            const auto text = options.value ("--seeks");
+            seeks = isDigits (text, 6) ? text.getIntValue() : 0;
+            if (seeks < 1 || seeks > maxSeeks)
+                return usageError ("--seeks takes a number from 1 to " + juce::String (maxSeeks));
+        }
+
+        SeekRun stems, loose;
+        juce::String error;
+        if (seekbenchStems (fileArg (options.positional[0]), seeks, stems, error) != exitOk)
+            return failure (error);
+        if (options.has ("--compare")
+            && seekbenchLoose (fileArg (options.value ("--compare")), seeks, loose, error) != exitOk)
+            return failure (error);
+
+        printSeekRun (stems);
+        if (options.has ("--compare"))
+        {
+            std::cout << "separate files:\n";
+            printSeekRun (loose);
+        }
+        return exitOk;
+    }
 }
 
 int main (int argc, char** argv)
@@ -423,5 +592,6 @@ int main (int argc, char** argv)
     if (command == "info")   return info (args);
     if (command == "verify") return verify (args);
     if (command == "merge")  return merge (args);
+    if (command == "seekbench") return seekbench (args);
     return usageError ("unknown command " + command);
 }

@@ -398,3 +398,64 @@ TEST (Cli, MergeFindsTheSidecarByUuidAfterARename)
     EXPECT_EQ (openTrack (renamed).data.track.rating, 5);
     EXPECT_TRUE (t.dir.findChildFiles (juce::File::findFiles, false, "*.a3events.json").isEmpty());
 }
+
+namespace
+{
+    // True when `text` has a line that starts with `label` and continues with a number.
+    bool hasNumberLine (const juce::String& text, const juce::String& label)
+    {
+        for (const auto& line : juce::StringArray::fromLines (text))
+            if (line.startsWith (label) && line.substring (label.length()).trim().containsOnly ("0123456789."))
+                return line.substring (label.length()).trim().isNotEmpty();
+        return false;
+    }
+}
+
+TEST (Cli, SeekbenchPrintsMedianAndMax)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto r = run (t, { "seekbench", path (file), "--seeks", "20" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_TRUE (r.out.contains ("seeks: 20\n"));
+    EXPECT_TRUE (hasNumberLine (r.out, "median ms:")) << r.out;
+    EXPECT_TRUE (hasNumberLine (r.out, "p95 ms:")) << r.out;
+    EXPECT_TRUE (hasNumberLine (r.out, "max ms:")) << r.out;
+    EXPECT_TRUE (r.out.contains ("bytes read per second of audio:"));
+}
+
+TEST (Cli, SeekbenchRefusesBadArguments)
+{
+    TempDir t;
+    const auto file = built (t);
+    EXPECT_EQ (run (t, { "seekbench", path (file), "--seeks", "0" }).exitCode, 1);
+    EXPECT_EQ (run (t, { "seekbench", path (file), "--seeks", "abc" }).exitCode, 1);
+    EXPECT_EQ (run (t, { "seekbench", path (file), "--seeks", "100001" }).exitCode, 1);
+    EXPECT_EQ (run (t, { "seekbench" }).exitCode, 1);
+
+    const auto notMkv = writeTestWav (t.dir, "plain.wav", 48000, 2, 16, 1000, 440.0);
+    const auto r = run (t, { "seekbench", path (notMkv) });
+    EXPECT_EQ (r.exitCode, 2);
+    EXPECT_FALSE (r.err.isEmpty());
+}
+
+TEST (Cli, SeekbenchCompareReadsLooseStems)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto loose = t.dir.getChildFile ("loose");
+    loose.createDirectory();
+    // The decoder probes content, not names, so WAV bytes under the .flac names stand in for FLAC files.
+    for (int s = 1; s <= 4; ++s)
+        writeTestWav (loose, "stem" + juce::String (s) + ".flac", 48000, 2, 16, 20000, 220.0 * s);
+
+    const auto r = run (t, { "seekbench", path (file), "--seeks", "5", "--compare", path (loose) });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_TRUE (r.out.contains ("separate files:\nseeks: 5\n"));
+    EXPECT_TRUE (hasNumberLine (r.out, "median ms:")) << r.out;
+    EXPECT_TRUE (r.out.fromFirstOccurrenceOf ("separate files:", false, false).contains ("max ms:"));
+
+    const auto missing = run (t, { "seekbench", path (file), "--compare", path (t.dir.getChildFile ("nope")) });
+    EXPECT_EQ (missing.exitCode, 2);
+    EXPECT_FALSE (missing.err.isEmpty());
+}
