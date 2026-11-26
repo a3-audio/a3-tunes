@@ -30,6 +30,13 @@ namespace a3t
     std::vector<Event> eventsFromVar (const juce::var&);   // capped at maxEvents
     juce::var analysisToVar (const Analysis&);             // only the members that are set
     Analysis analysisFromVar (const juce::var&);
+    juce::var stemsToVar (const std::array<StemLabel, numStems>&);
+    std::array<StemLabel, numStems> stemsFromVar (const juce::var&);   // missing entries stay empty
+
+    // The keys of an object that are not in `known` (void when none), and the way back:
+    // each one is set on `target` unless it already has that key.
+    juce::var unknownKeys (const juce::var& object, const juce::StringArray& known);
+    void copyUnknown (juce::DynamicObject& target, const juce::var& extra);
 
     // JUCE's parser recurses without a limit; check before handing it text.
     bool nestsTooDeep (const juce::String& text);

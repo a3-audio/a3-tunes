@@ -34,30 +34,6 @@ namespace a3t
 
         juce::String stringOr (const juce::var& v) { return v.isString() ? v.toString() : juce::String(); }
 
-        // The keys of `obj` that are not in `known`, or void when there are none.
-        juce::var unknownKeys (const juce::var& obj, const juce::StringArray& known)
-        {
-            auto* src = obj.getDynamicObject();
-            if (src == nullptr)
-                return {};
-            auto* out = new juce::DynamicObject();
-            juce::var result (out);
-            for (const auto& p : src->getProperties())
-                if (! known.contains (p.name.toString()))
-                    out->setProperty (p.name, p.value);
-            return out->getProperties().size() > 0 ? result : juce::var();
-        }
-
-        void copyUnknown (juce::DynamicObject& target, const juce::var& extra)
-        {
-            auto* src = extra.getDynamicObject();
-            if (src == nullptr)
-                return;
-            for (const auto& p : src->getProperties())
-                if (! target.hasProperty (p.name))
-                    target.setProperty (p.name, p.value);
-        }
-
         juce::var makeObject (juce::DynamicObject* o) { return juce::var (o); }
 
         // ---- enums ----
@@ -199,6 +175,7 @@ namespace a3t
             o->setProperty ("camelot", k.camelot);
             o->setProperty ("musical", k.musical);
             o->setProperty ("confidence", quantised (k.confidence));
+            copyUnknown (*o, k.extra);
             return makeObject (o);
         }
 
@@ -208,6 +185,7 @@ namespace a3t
             k.camelot = stringOr (v["camelot"]);
             k.musical = stringOr (v["musical"]);
             k.confidence = numberOr (v["confidence"], 0.0);
+            k.extra = unknownKeys (v, { "camelot", "musical", "confidence" });
             return k;
         }
 
@@ -219,6 +197,7 @@ namespace a3t
             o->setProperty ("beatsPerBar", g.beatsPerBar);
             o->setProperty ("gridVersion", g.gridVersion);
             o->setProperty ("corrected", g.corrected);
+            copyUnknown (*o, g.extra);
             return makeObject (o);
         }
 
@@ -230,6 +209,7 @@ namespace a3t
             g.beatsPerBar = intOr (v["beatsPerBar"], g.beatsPerBar);
             g.gridVersion = intOr (v["gridVersion"], g.gridVersion);
             g.corrected = boolOr (v["corrected"], g.corrected);
+            g.extra = unknownKeys (v, { "firstBeat", "bpm", "beatsPerBar", "gridVersion", "corrected" });
             return g;
         }
 
@@ -238,6 +218,7 @@ namespace a3t
             auto* o = new juce::DynamicObject();
             o->setProperty ("lufs", quantised (l.lufs));
             o->setProperty ("peakDb", quantised (l.peakDb));
+            copyUnknown (*o, l.extra);
             return makeObject (o);
         }
 
@@ -246,6 +227,7 @@ namespace a3t
             Loudness l;
             l.lufs = numberOr (v["lufs"], 0.0);
             l.peakDb = numberOr (v["peakDb"], 0.0);
+            l.extra = unknownKeys (v, { "lufs", "peakDb" });
             return l;
         }
 
@@ -260,6 +242,7 @@ namespace a3t
                 o->setProperty ("grid", gridToVar (*a.grid));
             if (a.loudness)
                 o->setProperty ("loudness", loudnessToVar (*a.loudness));
+            copyUnknown (*o, a.extra);
             return makeObject (o);
         }
 
@@ -274,6 +257,7 @@ namespace a3t
                 a.grid = gridFromVar (v["grid"]);
             if (v["loudness"].getDynamicObject() != nullptr)
                 a.loudness = loudnessFromVar (v["loudness"]);
+            a.extra = unknownKeys (v, { "bpm", "key", "grid", "loudness" });
             return a;
         }
 
@@ -293,6 +277,7 @@ namespace a3t
                 o->setProperty ("colour", c.colour);
                 o->setProperty ("name", c.name);
             }
+            copyUnknown (*o, c.extra);
             return makeObject (o);
         }
 
@@ -316,6 +301,7 @@ namespace a3t
             c.time = numberOr (v["time"], 0.0);
             c.colour = stringOr (v["colour"]);
             c.name = stringOr (v["name"]);
+            c.extra = unknownKeys (v, { "kind", "slot", "time", "colour", "name" });
             return c;
         }
 
@@ -329,6 +315,7 @@ namespace a3t
             o->setProperty ("colour", l.colour);
             o->setProperty ("name", l.name);
             o->setProperty ("active", l.active);
+            copyUnknown (*o, l.extra);
             return makeObject (o);
         }
 
@@ -348,6 +335,7 @@ namespace a3t
             l.colour = stringOr (v["colour"]);
             l.name = stringOr (v["name"]);
             l.active = boolOr (v["active"], false);
+            l.extra = unknownKeys (v, { "slot", "in", "out", "colour", "name", "active" });
             return l;
         }
 
@@ -359,6 +347,7 @@ namespace a3t
             o->setProperty ("kind", phraseKinds[static_cast<int> (p.kind)]);
             o->setProperty ("mood", phraseMoods[static_cast<int> (p.mood)]);
             o->setProperty ("label", p.label);
+            copyUnknown (*o, p.extra);
             return makeObject (o);
         }
 
@@ -374,6 +363,7 @@ namespace a3t
             p.start = numberOr (v["start"], 0.0);
             p.end = numberOr (v["end"], 0.0);
             p.label = stringOr (v["label"]);
+            p.extra = unknownKeys (v, { "start", "end", "kind", "mood", "label" });
             return p;
         }
 
@@ -401,31 +391,6 @@ namespace a3t
                         out.push_back (*parsedItem);
                     }
             return out;
-        }
-
-        juce::var stemsToVar (const std::array<StemLabel, numStems>& stems)
-        {
-            juce::Array<juce::var> arr;
-            for (const auto& s : stems)
-            {
-                auto* o = new juce::DynamicObject();
-                o->setProperty ("label", s.label);
-                o->setProperty ("colour", s.colour);
-                arr.add (makeObject (o));
-            }
-            return arr;
-        }
-
-        void stemsFromVar (std::array<StemLabel, numStems>& stems, const juce::var& v)
-        {
-            auto* arr = v.getArray();
-            if (arr == nullptr)
-                return;
-            for (int i = 0; i < numStems && i < arr->size(); ++i)
-            {
-                stems[static_cast<size_t> (i)].label = stringOr ((*arr)[i]["label"]);
-                stems[static_cast<size_t> (i)].colour = stringOr ((*arr)[i]["colour"]);
-            }
         }
 
         bool nestsTooDeepImpl (const juce::String& text)
@@ -461,7 +426,7 @@ namespace a3t
             d.revision = intOr (v["revision"], 0);
             d.track = trackFromVar (v["track"]);
             d.analysis = analysisFromVar (v["analysis"]);
-            stemsFromVar (d.stems, v["stems"]);
+            d.stems = stemsFromVar (v["stems"]);
             d.cues = cuesFromVar (v["cues"]);
             d.loops = loopsFromVar (v["loops"]);
             d.phrases = phrasesFromVar (v["phrases"]);
@@ -469,6 +434,59 @@ namespace a3t
             d.extra = unknownKeys (v, knownTopKeys);
             return d;
         }
+    }
+
+    juce::var unknownKeys (const juce::var& obj, const juce::StringArray& known)
+    {
+        auto* src = obj.getDynamicObject();
+        if (src == nullptr)
+            return {};
+        auto* out = new juce::DynamicObject();
+        juce::var result (out);
+        for (const auto& p : src->getProperties())
+            if (! known.contains (p.name.toString()))
+                out->setProperty (p.name, p.value);
+        return out->getProperties().size() > 0 ? result : juce::var();
+    }
+
+    void copyUnknown (juce::DynamicObject& target, const juce::var& extra)
+    {
+        auto* src = extra.getDynamicObject();
+        if (src == nullptr)
+            return;
+        for (const auto& p : src->getProperties())
+            if (! target.hasProperty (p.name))
+                target.setProperty (p.name, p.value);
+    }
+
+    juce::var stemsToVar (const std::array<StemLabel, numStems>& stems)
+    {
+        juce::Array<juce::var> arr;
+        for (const auto& s : stems)
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("label", s.label);
+            o->setProperty ("colour", s.colour);
+            copyUnknown (*o, s.extra);
+            arr.add (makeObject (o));
+        }
+        return arr;
+    }
+
+    std::array<StemLabel, numStems> stemsFromVar (const juce::var& v)
+    {
+        std::array<StemLabel, numStems> stems;
+        auto* arr = v.getArray();
+        if (arr == nullptr)
+            return stems;
+        for (int i = 0; i < numStems && i < arr->size(); ++i)
+        {
+            auto& s = stems[static_cast<size_t> (i)];
+            s.label = stringOr ((*arr)[i]["label"]);
+            s.colour = stringOr ((*arr)[i]["colour"]);
+            s.extra = unknownKeys ((*arr)[i], { "label", "colour" });
+        }
+        return stems;
     }
 
     juce::var cuesToVar (const std::vector<Cue>& v) { return listToVar (v, cueToVar); }

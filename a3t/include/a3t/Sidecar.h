@@ -21,8 +21,13 @@ namespace a3t
         std::optional<std::vector<Phrase>> phrases;
         std::optional<Analysis> analysis;   // only the members the rig changed are set
         juce::NamedValueSet trackFields;    // field by field: rating, playCount, colour, comment, ...
+        std::optional<std::array<StemLabel, numStems>> stems;   // whole, like a list section
+        juce::var extra;                    // unknown top-level keys (a newer minor version), kept on save
 
         bool empty() const;
+        // "key" for each unknown top-level key, "analysis.key" for each unknown analysis key:
+        // what a merge cannot carry over, so a merged sidecar holding any of them is kept.
+        juce::StringArray unknownKeyNames() const;
     };
 
     struct LoadedSidecar
@@ -37,8 +42,12 @@ namespace a3t
     LoadedSidecar loadSidecar (const juce::File&);
     // Atomic. An empty sidecar deletes the file. Refuses (false) to touch a newer or damaged file.
     bool saveSidecar (const juce::File&, const Sidecar&);
+    // Deletes the file only if its bytes are still `asLoaded` (the rig may have written since);
+    // false, with the file left alone, otherwise or when the delete fails.
+    bool deleteSidecarIfUnchanged (const juce::File&, const juce::MemoryBlock& asLoaded);
 
-    // Sections replace whole; analysis member by member; track fields by name.
+    // Sections (and stems) replace whole; analysis member by member (unknown analysis keys by name);
+    // track fields by name.
     A3tData overlay (const A3tData&, const Sidecar&);
     // A v1 sidecar (no uuid) was found by name and belongs; otherwise the uuids must match.
     bool belongsTo (const Sidecar&, const A3tData&);

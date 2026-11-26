@@ -278,3 +278,20 @@ TEST (Rewrite, MoreEventsThanTheCapLeaveTheFileUntouched)
     }
     expectRefusedAndUntouched (r.output, data, "513 events");
 }
+
+TEST (Rewrite, GridSegmentsSurviveARewrite)
+{
+    TempDir t;
+    const auto r = written (t);
+    auto data = parse (R"({"version":1,"analysis":{"grid":{"bpm":120,"segments":[{"start":0,"bpm":120}]}}})").data;
+    const auto own = dataOf (r.output);
+    data.uuid = own.uuid;
+    data.revision = 4;
+    const auto result = rewriteMetadata (r.output, data);
+    ASSERT_TRUE (result.ok) << result.error;
+    auto again = dataOf (r.output);
+    again.revision = 5;
+    ASSERT_TRUE (rewriteMetadata (r.output, again).ok);
+    const auto text = serialise (dataOf (r.output));
+    EXPECT_TRUE (juce::JSON::parse (text)["analysis"]["grid"]["segments"].isArray()) << text;
+}

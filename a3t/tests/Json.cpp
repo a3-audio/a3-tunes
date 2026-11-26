@@ -259,3 +259,34 @@ TEST (Json, NestingBehindASingleQuotedStringIsDamaged)
     EXPECT_FALSE (nestsTooDeep (R"({"a":"it's","b":'say "[[[["',"c":'\'[[',"d":[[1]]})"));
     EXPECT_EQ (parse (R"({"version":1,"a":"it's [[[","b":'"[[[[',"c":[1]})").status, Status::ok);
 }
+
+// Spec 9 reserves analysis.grid.segments for a later minor version that stays "version":1.
+TEST (Json, UnknownKeysAtEveryLevelSurvive)
+{
+    const auto r = parse (R"({"version":1,
+        "analysis":{"bpm":120,"foo":1,
+                    "grid":{"firstBeat":0.5,"bpm":120,"segments":[{"start":0,"bpm":120}]},
+                    "key":{"camelot":"8A","foo":2},
+                    "loudness":{"lufs":-9,"foo":3}},
+        "cues":[{"kind":"hot","slot":1,"time":2,"foo":4}],
+        "loops":[{"in":1,"out":2,"foo":5}],
+        "phrases":[{"start":0,"end":1,"kind":"intro","mood":"mid","foo":6}],
+        "stems":[{"label":"Drums","foo":7}]})");
+    ASSERT_EQ (r.status, Status::ok);
+    const auto once = parse (serialise (r.data));
+    ASSERT_EQ (once.status, Status::ok);
+    EXPECT_TRUE (once.data == r.data);
+    const auto out = parsed (serialise (once.data));
+    EXPECT_EQ (static_cast<int> (out["analysis"]["grid"]["segments"][0]["bpm"]), 120);
+    EXPECT_EQ (static_cast<int> (out["analysis"]["foo"]), 1);
+    EXPECT_EQ (static_cast<int> (out["analysis"]["key"]["foo"]), 2);
+    EXPECT_EQ (static_cast<int> (out["analysis"]["loudness"]["foo"]), 3);
+    EXPECT_EQ (static_cast<int> (out["cues"][0]["foo"]), 4);
+    EXPECT_EQ (static_cast<int> (out["loops"][0]["foo"]), 5);
+    EXPECT_EQ (static_cast<int> (out["phrases"][0]["foo"]), 6);
+    EXPECT_EQ (static_cast<int> (out["stems"][0]["foo"]), 7);
+
+    auto changed = once.data;
+    changed.cues[0].extra = juce::JSON::parse (R"({"foo":5})");
+    EXPECT_FALSE (changed == once.data);
+}

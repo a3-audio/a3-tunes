@@ -13,11 +13,11 @@ namespace a3t
 {
     struct Change
     {
-        enum class Section { event, cue, loop, phrase, grid, analysis, trackField } section = Section::event;
+        enum class Section { event, cue, loop, phrase, grid, analysis, trackField, stems } section = Section::event;
         enum class Kind { added, removed, changed } kind = Kind::changed;
         // Stable: "event:2:32.000000:position", "cue:hot:3", "cue:memory:31.200000",
         // "loop:3", "loop:in:61.000000", "phrase:96.000000", "trackField:rating",
-        // "grid", "analysis:bpm", "analysis:key", "analysis:loudness".
+        // "grid", "analysis:bpm", "analysis:key", "analysis:loudness", "stems" (all four labels, one item).
         juce::String key;
         juce::String laptop, rig;   // compact JSON of the item; empty when absent
         bool automatic = false;     // playCount: the larger value wins, nobody chooses

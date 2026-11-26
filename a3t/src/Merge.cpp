@@ -248,6 +248,18 @@ namespace a3t
         }
     }
 
+    namespace
+    {
+        const juce::String stemsKey = "stems";
+
+        void diffStems (const A3tData& laptop, const Sidecar& rig, std::vector<Change>& out)
+        {
+            const auto mine = text (stemsToVar (laptop.stems)), theirs = text (stemsToVar (*rig.stems));
+            if (mine != theirs)
+                out.push_back (makeChange (Section::stems, Kind::changed, stemsKey, mine, theirs));
+        }
+    }
+
     std::vector<Change> diff (const A3tData& laptop, const Sidecar& rig)
     {
         std::vector<Change> out;
@@ -256,6 +268,7 @@ namespace a3t
         if (rig.loops) diffSection (Section::loop, laptop.loops, *rig.loops, out);
         if (rig.phrases) diffSection (Section::phrase, laptop.phrases, *rig.phrases, out);
         if (rig.analysis) diffAnalysis (laptop.analysis, *rig.analysis, out);
+        if (rig.stems) diffStems (laptop, rig, out);
         diffTrackFields (laptop, rig.trackFields, out);
         return out;
     }
@@ -270,6 +283,7 @@ namespace a3t
         if (rig.phrases) chosen.phrases = applySection (laptop.phrases, *rig.phrases, takeFromRig);
         if (rig.analysis) chosen.analysis = takenAnalysis (*rig.analysis, takeFromRig);
         chosen.trackFields = takenTrackFields (laptop, rig.trackFields, takeFromRig);
+        if (rig.stems && takeFromRig.count (stemsKey) > 0) chosen.stems = rig.stems;
 
         auto out = overlay (laptop, chosen);
         out.revision = laptop.revision + 1;

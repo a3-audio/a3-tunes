@@ -16,18 +16,19 @@ namespace a3t
 
         bool same (const Key& a, const Key& b)
         {
-            return a.camelot == b.camelot && a.musical == b.musical && a.confidence == b.confidence;
+            return a.camelot == b.camelot && a.musical == b.musical && a.confidence == b.confidence
+                && same (a.extra, b.extra);
         }
 
         bool same (const Grid& a, const Grid& b)
         {
             return a.firstBeat == b.firstBeat && a.bpm == b.bpm && a.beatsPerBar == b.beatsPerBar
-                && a.gridVersion == b.gridVersion && a.corrected == b.corrected;
+                && a.gridVersion == b.gridVersion && a.corrected == b.corrected && same (a.extra, b.extra);
         }
 
         bool same (const Loudness& a, const Loudness& b)
         {
-            return a.lufs == b.lufs && a.peakDb == b.peakDb;
+            return a.lufs == b.lufs && a.peakDb == b.peakDb && same (a.extra, b.extra);
         }
 
         bool same (const AudioInfo& a, const AudioInfo& b)
@@ -58,24 +59,24 @@ namespace a3t
         bool same (const Cue& a, const Cue& b)
         {
             return a.kind == b.kind && a.slot == b.slot && a.time == b.time
-                && a.colour == b.colour && a.name == b.name;
+                && a.colour == b.colour && a.name == b.name && same (a.extra, b.extra);
         }
 
         bool same (const Loop& a, const Loop& b)
         {
             return a.slot == b.slot && a.in == b.in && a.out == b.out && a.colour == b.colour
-                && a.name == b.name && a.active == b.active;
+                && a.name == b.name && a.active == b.active && same (a.extra, b.extra);
         }
 
         bool same (const Phrase& a, const Phrase& b)
         {
             return a.kind == b.kind && a.mood == b.mood && a.start == b.start && a.end == b.end
-                && a.label == b.label;
+                && a.label == b.label && same (a.extra, b.extra);
         }
 
         bool same (const StemLabel& a, const StemLabel& b)
         {
-            return a.label == b.label && a.colour == b.colour;
+            return a.label == b.label && a.colour == b.colour && same (a.extra, b.extra);
         }
 
         bool same (const Event& a, const Event& b) { return a == b; }
@@ -107,7 +108,7 @@ namespace a3t
         bool same (const Analysis& a, const Analysis& b)
         {
             return same (a.bpm, b.bpm) && same (a.key, b.key) && same (a.grid, b.grid)
-                && same (a.loudness, b.loudness);
+                && same (a.loudness, b.loudness) && same (a.extra, b.extra);
         }
     }
 

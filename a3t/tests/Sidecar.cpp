@@ -295,3 +295,90 @@ TEST (Sidecar, NestingBehindASingleQuotedStringIsDamaged)
     EXPECT_TRUE (nestsTooDeep (file.loadFileAsString()));
     EXPECT_EQ (loadSidecar (file).status, Status::damaged);
 }
+
+namespace
+{
+    std::array<StemLabel, numStems> sampleStems()
+    {
+        std::array<StemLabel, numStems> stems;
+        stems[0].label = "Drums";
+        stems[0].colour = "#ff0000";
+        stems[3].label = "Vocals";
+        return stems;
+    }
+}
+
+// Spec 7: the rig may change everything a3t.json holds, the stem labels too; the section is whole.
+TEST (Sidecar, StemsSectionRoundTripsAndOverlays)
+{
+    TempFolder tmp;
+    const auto file = tmp.dir.getChildFile ("t.a3events.json");
+    Sidecar s;
+    s.basedOnUuid = "u";
+    s.stems = sampleStems();
+    EXPECT_FALSE (s.empty());
+    ASSERT_TRUE (saveSidecar (file, s));
+    const auto loaded = loadSidecar (file);
+    ASSERT_EQ (loaded.status, Status::ok);
+    ASSERT_TRUE (loaded.sidecar.stems.has_value());
+    EXPECT_EQ ((*loaded.sidecar.stems)[0].label, "Drums");
+    EXPECT_EQ ((*loaded.sidecar.stems)[0].colour, "#ff0000");
+    EXPECT_EQ ((*loaded.sidecar.stems)[3].label, "Vocals");
+
+    auto base = sampleData();
+    base.stems[1].label = "Bass";
+    const auto out = overlay (base, loaded.sidecar);
+    EXPECT_EQ (out.stems[0].label, "Drums");
+    EXPECT_EQ (out.stems[1].label, "");   // whole section: the laptop's label is replaced
+    EXPECT_EQ (out.stems[3].label, "Vocals");
+
+    Sidecar none;
+    none.basedOnUuid = "u";
+    ASSERT_TRUE (saveSidecar (file, none));   // empty: deletes
+    EXPECT_FALSE (file.exists());
+    EXPECT_FALSE (overlay (base, none).stems[0].label.isNotEmpty());
+}
+
+// A newer minor version (still "version": 2) may add top-level keys; a3t keeps them.
+TEST (Sidecar, UnknownTopLevelKeysSurviveSave)
+{
+    TempFolder tmp;
+    const auto file = tmp.dir.getChildFile ("t.a3events.json");
+    ASSERT_TRUE (file.replaceWithText (R"({"version":2,"based_on":{"uuid":"u","revision":1},
+        "events":[],"future":{"a":1},"analysis":{"later":2,"bpm":120}})"));
+    const auto loaded = loadSidecar (file);
+    ASSERT_EQ (loaded.status, Status::ok);
+    EXPECT_FALSE (loaded.sidecar.empty());
+    EXPECT_EQ (loaded.sidecar.unknownKeyNames(), juce::StringArray ({ "future", "analysis.later" }));
+
+    auto changed = loaded.sidecar;
+    changed.trackFields.set ("rating", 3);
+    ASSERT_TRUE (saveSidecar (file, changed));
+    const auto text = juce::JSON::parse (file.loadFileAsString());
+    EXPECT_EQ (static_cast<int> (text["future"]["a"]), 1);
+    EXPECT_EQ (static_cast<int> (text["analysis"]["later"]), 2);
+    EXPECT_EQ (static_cast<int> (text["track"]["rating"]), 3);
+
+    Sidecar onlyExtra;
+    onlyExtra.extra = juce::JSON::parse (R"({"future":1})");
+    EXPECT_FALSE (onlyExtra.empty());
+}
+
+TEST (Sidecar, ChangedSidecarIsNotDeleted)
+{
+    TempFolder tmp;
+    const auto file = tmp.dir.getChildFile ("t.a3events.json");
+    ASSERT_TRUE (saveSidecar (file, sampleSidecar()));
+    juce::MemoryBlock asLoaded;
+    ASSERT_TRUE (file.loadFileAsData (asLoaded));
+
+    ASSERT_TRUE (file.replaceWithText (readAll (file) + " "));
+    const auto changedText = readAll (file);
+    EXPECT_FALSE (deleteSidecarIfUnchanged (file, asLoaded));
+    EXPECT_EQ (readAll (file), changedText);
+
+    juce::MemoryBlock now;
+    ASSERT_TRUE (file.loadFileAsData (now));
+    EXPECT_TRUE (deleteSidecarIfUnchanged (file, now));
+    EXPECT_FALSE (file.exists());
+}

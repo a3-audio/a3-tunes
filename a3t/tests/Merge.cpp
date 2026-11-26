@@ -480,3 +480,27 @@ TEST (Merge, ChangedMemoryCueIsTakenByKey)
     EXPECT_EQ (applyChanges (laptop, rig, { "cue:memory:31.200000" }).cues[0].name, "break");
     EXPECT_TRUE (applyChanges (laptop, rig, {}).cues[0].name.isEmpty());
 }
+
+TEST (Merge, StemsAreOneItem)
+{
+    auto laptop = laptopData();
+    laptop.stems[0].label = "Drums";
+    auto rig = sidecarFor (laptop);
+    rig.stems = laptop.stems;
+    EXPECT_TRUE (diff (laptop, rig).empty());
+
+    (*rig.stems)[0].label = "Kick";
+    (*rig.stems)[2].colour = "#00ff00";
+    const auto changes = diff (laptop, rig);
+    ASSERT_EQ (changes.size(), 1u);
+    EXPECT_EQ (changes[0].key, "stems");
+    EXPECT_EQ (changes[0].section, Change::Section::stems);
+    EXPECT_EQ (changes[0].kind, Change::Kind::changed);
+    EXPECT_TRUE (changes[0].rig.contains ("Kick"));
+    EXPECT_TRUE (changes[0].laptop.contains ("Drums"));
+
+    EXPECT_EQ (applyChanges (laptop, rig, {}).stems[0].label, "Drums");
+    const auto taken = applyChanges (laptop, rig, { "stems" });
+    EXPECT_EQ (taken.stems[0].label, "Kick");
+    EXPECT_EQ (taken.stems[2].colour, "#00ff00");
+}

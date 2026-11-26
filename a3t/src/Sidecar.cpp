@@ -7,6 +7,8 @@ namespace a3t
     namespace
     {
         const juce::String sidecarSuffix = ".a3events.json";
+        const juce::StringArray knownSidecarKeys {
+            "version", "based_on", "events", "cues", "loops", "phrases", "analysis", "track", "stems" };
         const juce::String trackSuffix = ".a3mkv";
 
         bool isNumber (const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
@@ -36,6 +38,9 @@ namespace a3t
             if (root["analysis"].getDynamicObject() != nullptr)
                 s.analysis = analysisFromVar (root["analysis"]);
             readTrackFields (s, root["track"]);
+            if (root["stems"].isArray())
+                s.stems = stemsFromVar (root["stems"]);
+            s.extra = unknownKeys (root, knownSidecarKeys);
         }
 
         void readBasedOn (Sidecar& s, const juce::var& basedOn)
@@ -108,6 +113,8 @@ namespace a3t
                     track->setProperty (p.name, p.value);
                 root->setProperty ("track", juce::var (track));
             }
+            if (s.stems) root->setProperty ("stems", stemsToVar (*s.stems));
+            copyUnknown (*root, s.extra);
             return result;
         }
 
@@ -126,6 +133,13 @@ namespace a3t
             if (rig.key) target.key = rig.key;
             if (rig.grid) target.grid = rig.grid;
             if (rig.loudness) target.loudness = rig.loudness;
+            if (auto* extra = rig.extra.getDynamicObject())
+            {
+                if (target.extra.getDynamicObject() == nullptr)
+                    target.extra = juce::var (new juce::DynamicObject());
+                for (const auto& p : extra->getProperties())
+                    target.extra.getDynamicObject()->setProperty (p.name, p.value);
+            }
         }
 
         TrackInfo applyTrackFields (const TrackInfo& track, const juce::NamedValueSet& fields)
@@ -142,7 +156,21 @@ namespace a3t
 
     bool Sidecar::empty() const
     {
-        return ! events && ! cues && ! loops && ! phrases && ! analysis && trackFields.size() == 0;
+        return ! events && ! cues && ! loops && ! phrases && ! analysis && trackFields.size() == 0 && ! stems
+            && extra.getDynamicObject() == nullptr;
+    }
+
+    juce::StringArray Sidecar::unknownKeyNames() const
+    {
+        juce::StringArray names;
+        if (auto* o = extra.getDynamicObject())
+            for (const auto& p : o->getProperties())
+                names.add (p.name.toString());
+        if (analysis)
+            if (auto* o = analysis->extra.getDynamicObject())
+                for (const auto& p : o->getProperties())
+                    names.add ("analysis." + p.name.toString());
+        return names;
     }
 
     juce::File sidecarFileFor (const juce::File& track)
@@ -173,6 +201,14 @@ namespace a3t
         return writeAtomically (file, juce::JSON::toString (documentFor (sidecar), false));
     }
 
+    bool deleteSidecarIfUnchanged (const juce::File& file, const juce::MemoryBlock& asLoaded)
+    {
+        juce::MemoryBlock now;
+        if (! file.loadFileAsData (now) || now != asLoaded)
+            return false;
+        return file.deleteFile();
+    }
+
     A3tData overlay (const A3tData& base, const Sidecar& sidecar)
     {
         auto out = base;
@@ -180,6 +216,7 @@ namespace a3t
         if (sidecar.cues) out.cues = *sidecar.cues;
         if (sidecar.loops) out.loops = *sidecar.loops;
         if (sidecar.phrases) out.phrases = *sidecar.phrases;
+        if (sidecar.stems) out.stems = *sidecar.stems;
         if (sidecar.analysis) applyAnalysis (out.analysis, *sidecar.analysis);
         out.track = applyTrackFields (out.track, sidecar.trackFields);
         canonicalOrder (out);

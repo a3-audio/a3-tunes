@@ -21,6 +21,7 @@ namespace a3t
     {
         juce::String camelot, musical;
         double confidence = 0.0;
+        juce::var extra;   // unknown keys, kept on rewrite (as on every struct below that has one)
     };
 
     struct Grid
@@ -29,11 +30,13 @@ namespace a3t
         int beatsPerBar = 4;
         int gridVersion = 2;
         bool corrected = false;
+        juce::var extra;   // e.g. "segments", reserved for a later minor version (spec 9)
     };
 
     struct Loudness
     {
         double lufs = 0.0, peakDb = 0.0;
+        juce::var extra;
     };
 
     struct Analysis
@@ -42,6 +45,7 @@ namespace a3t
         std::optional<Key> key;
         std::optional<Grid> grid;
         std::optional<Loudness> loudness;
+        juce::var extra;
     };
 
     struct AudioInfo
@@ -69,6 +73,7 @@ namespace a3t
         int slot = -1;
         double time = 0.0;
         juce::String colour, name;
+        juce::var extra;
     };
 
     struct Loop
@@ -77,6 +82,7 @@ namespace a3t
         double in = 0.0, out = 0.0;
         juce::String colour, name;
         bool active = false;
+        juce::var extra;
     };
 
     struct Phrase
@@ -85,11 +91,13 @@ namespace a3t
         enum class Mood { high, mid, low } mood = Mood::mid;
         double start = 0.0, end = 0.0;
         juce::String label;
+        juce::var extra;
     };
 
     struct StemLabel
     {
         juce::String label, colour;
+        juce::var extra;
     };
 
     struct A3tData
