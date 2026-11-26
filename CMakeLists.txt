@@ -12,6 +12,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample)
 find_package(GTest REQUIRED)
 
+# Before add_subdirectory: add_test in a3t/ registers only when testing is already on.
+enable_testing()
 add_subdirectory(a3t)
 
 add_executable(a3t-cli cli/main.cpp)
@@ -19,5 +21,3 @@ add_executable(a3t-cli cli/main.cpp)
 set_target_properties(a3t-cli PROPERTIES OUTPUT_NAME a3t
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 target_link_libraries(a3t-cli PRIVATE a3t)
-
-enable_testing()

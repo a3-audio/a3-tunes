@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Raphael Eismann
+# SPDX-License-Identifier: GPL-3.0-or-later
 # JUCE's module code is compiled once, here: a juce:: target hands its module
 # .cpp files to every target that links it publicly, so each consumer would
 # carry its own copy. Distro JUCE builds also leave zlib to the system.
