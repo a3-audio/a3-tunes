@@ -3,6 +3,8 @@
 #include "a3t/Derived.h"
 
 #include <algorithm>
+#include <iterator>
+#include <optional>
 
 namespace a3t
 {
@@ -38,7 +40,8 @@ namespace a3t
 
         juce::String chapterTitle (const Cue& c)
         {
-            if (c.kind != Cue::Kind::hot)
+            constexpr int numHotCueSlots = 16;
+            if (c.kind != Cue::Kind::hot || c.slot < 0 || c.slot >= numHotCueSlots)
                 return c.name;
             const auto letter = juce::String::charToString ((juce::juce_wchar) ('A' + c.slot));
             return c.name.isEmpty() ? letter : letter + ": " + c.name;
@@ -77,7 +80,9 @@ namespace a3t
     std::vector<Chapter> chaptersFor (const A3tData& d, double lengthSeconds)
     {
         std::vector<Cue> cues;
-        std::copy_if (d.cues.begin(), d.cues.end(), std::back_inserter (cues), isChapterCue);
+        // A muxer refuses chapters outside the track: those past the end go, an early one starts at 0.
+        std::copy_if (d.cues.begin(), d.cues.end(), std::back_inserter (cues),
+                      [lengthSeconds] (const Cue& c) { return isChapterCue (c) && c.time < lengthSeconds; });
         std::stable_sort (cues.begin(), cues.end(),
                           [] (const Cue& a, const Cue& b) { return a.time < b.time; });
 
@@ -85,10 +90,11 @@ namespace a3t
         for (size_t i = 0; i < cues.size(); ++i)
         {
             Chapter c;
-            c.start = cues[i].time;
+            c.start = std::max (cues[i].time, 0.0);
             c.end = i + 1 < cues.size() ? cues[i + 1].time : lengthSeconds;
             if (c.end <= c.start)
                 c.end = c.start + minimalChapterLength;
+            c.end = std::min (c.end, lengthSeconds);
             c.title = chapterTitle (cues[i]);
             chapters.push_back (std::move (c));
         }

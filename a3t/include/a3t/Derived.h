@@ -22,5 +22,6 @@ namespace a3t
     };
 
     // Hot and memory cues by time; each chapter ends where the next starts, the last at lengthSeconds.
+    // Every chapter lies inside [0, lengthSeconds]: cues at or past the end are left out.
     std::vector<Chapter> chaptersFor (const A3tData&, double lengthSeconds);
 }

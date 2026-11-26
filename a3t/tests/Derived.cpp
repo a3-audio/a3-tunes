@@ -140,3 +140,49 @@ TEST (Derived, ZeroLengthChapterGetsAMinimalEnd)
     EXPECT_DOUBLE_EQ (ch[0].end, 5.001);
     EXPECT_DOUBLE_EQ (ch[1].end, 10.0);
 }
+
+TEST (Derived, HotCueSlotOutsideTheLettersIsTitledByItsName)
+{
+    A3tData d;
+    d.cues = { cue (Cue::Kind::hot, 1.0, 16, "drop"), cue (Cue::Kind::hot, 2.0, -1, "intro"),
+               cue (Cue::Kind::hot, 3.0, 99) };
+    const auto ch = chaptersFor (d, 10.0);
+    ASSERT_EQ (ch.size(), 3u);
+    EXPECT_EQ (ch[0].title, "drop");
+    EXPECT_EQ (ch[1].title, "intro");
+    EXPECT_EQ (ch[2].title, "");
+}
+
+TEST (Derived, ChapterAtOrPastTheLengthIsDropped)
+{
+    A3tData d;
+    d.cues = { cue (Cue::Kind::memory, 2.0, -1, "in"), cue (Cue::Kind::memory, 10.0, -1, "at"),
+               cue (Cue::Kind::hot, 12.0, 0, "past") };
+    const auto ch = chaptersFor (d, 10.0);
+    ASSERT_EQ (ch.size(), 1u);
+    EXPECT_EQ (ch[0].title, "in");
+    EXPECT_DOUBLE_EQ (ch[0].end, 10.0);
+}
+
+TEST (Derived, ChapterEndsNeverPassTheLength)
+{
+    A3tData d;
+    d.cues = { cue (Cue::Kind::memory, 9.9995, -1, "a"), cue (Cue::Kind::memory, 9.9995, -1, "b") };
+    const auto ch = chaptersFor (d, 10.0);
+    ASSERT_EQ (ch.size(), 2u);
+    for (const auto& c : ch)
+    {
+        EXPECT_LE (c.end, 10.0);
+        EXPECT_GT (c.end, c.start);
+    }
+}
+
+TEST (Derived, NegativeCueTimeStartsAtZero)
+{
+    A3tData d;
+    d.cues = { cue (Cue::Kind::memory, -0.5, -1, "early"), cue (Cue::Kind::memory, 4.0, -1, "b") };
+    const auto ch = chaptersFor (d, 10.0);
+    ASSERT_EQ (ch.size(), 2u);
+    EXPECT_DOUBLE_EQ (ch[0].start, 0.0);
+    EXPECT_DOUBLE_EQ (ch[0].end, 4.0);
+}
