@@ -249,7 +249,7 @@ namespace a3t
             return l;
         }
 
-        juce::var analysisToVar (const Analysis& a)
+        juce::var analysisToVarImpl (const Analysis& a)
         {
             auto* o = new juce::DynamicObject();
             if (a.bpm)
@@ -263,7 +263,7 @@ namespace a3t
             return makeObject (o);
         }
 
-        Analysis analysisFromVar (const juce::var& v)
+        Analysis analysisFromVarImpl (const juce::var& v)
         {
             Analysis a;
             if (isFiniteNumber (v["bpm"]))
@@ -428,8 +428,7 @@ namespace a3t
             }
         }
 
-        // JUCE's parser recurses without a limit.
-        bool nestsTooDeep (const juce::String& text)
+        bool nestsTooDeepImpl (const juce::String& text)
         {
             constexpr int maxDepth = 64;
             int depth = 0;
@@ -461,14 +460,26 @@ namespace a3t
             d.track = trackFromVar (v["track"]);
             d.analysis = analysisFromVar (v["analysis"]);
             stemsFromVar (d.stems, v["stems"]);
-            d.cues = listFromVar<Cue> (v["cues"], cueFromVar);
-            d.loops = listFromVar<Loop> (v["loops"], loopFromVar);
-            d.phrases = listFromVar<Phrase> (v["phrases"], phraseFromVar);
-            d.events = listFromVar<Event> (v["events"], eventFromVar, maxEvents);
+            d.cues = cuesFromVar (v["cues"]);
+            d.loops = loopsFromVar (v["loops"]);
+            d.phrases = phrasesFromVar (v["phrases"]);
+            d.events = eventsFromVar (v["events"]);
             d.extra = unknownKeys (v, knownTopKeys);
             return d;
         }
     }
+
+    juce::var cuesToVar (const std::vector<Cue>& v) { return listToVar (v, cueToVar); }
+    std::vector<Cue> cuesFromVar (const juce::var& v) { return listFromVar<Cue> (v, cueFromVar); }
+    juce::var loopsToVar (const std::vector<Loop>& v) { return listToVar (v, loopToVar); }
+    std::vector<Loop> loopsFromVar (const juce::var& v) { return listFromVar<Loop> (v, loopFromVar); }
+    juce::var phrasesToVar (const std::vector<Phrase>& v) { return listToVar (v, phraseToVar); }
+    std::vector<Phrase> phrasesFromVar (const juce::var& v) { return listFromVar<Phrase> (v, phraseFromVar); }
+    juce::var eventsToVar (const std::vector<Event>& v) { return listToVar (v, [] (const Event& e) { return toVar (e); }); }
+    std::vector<Event> eventsFromVar (const juce::var& v) { return listFromVar<Event> (v, eventFromVar, maxEvents); }
+    juce::var analysisToVar (const Analysis& a) { return analysisToVarImpl (a); }
+    Analysis analysisFromVar (const juce::var& v) { return analysisFromVarImpl (v); }
+    bool nestsTooDeep (const juce::String& text) { return nestsTooDeepImpl (text); }
 
     juce::var trackToVar (const TrackInfo& t)
     {
@@ -535,10 +546,10 @@ namespace a3t
         o->setProperty ("track", trackToVar (d.track));
         o->setProperty ("analysis", analysisToVar (d.analysis));
         o->setProperty ("stems", stemsToVar (d.stems));
-        o->setProperty ("cues", listToVar (d.cues, cueToVar));
-        o->setProperty ("loops", listToVar (d.loops, loopToVar));
-        o->setProperty ("phrases", listToVar (d.phrases, phraseToVar));
-        o->setProperty ("events", listToVar (d.events, [] (const Event& e) { return toVar (e); }));
+        o->setProperty ("cues", cuesToVar (d.cues));
+        o->setProperty ("loops", loopsToVar (d.loops));
+        o->setProperty ("phrases", phrasesToVar (d.phrases));
+        o->setProperty ("events", eventsToVar (d.events));
         copyUnknown (*o, d.extra);
         return juce::JSON::toString (root, false);
     }

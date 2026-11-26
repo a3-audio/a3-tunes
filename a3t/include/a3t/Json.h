@@ -17,4 +17,20 @@ namespace a3t
     // The "track" object alone; the sidecar overlay reuses these.
     juce::var trackToVar (const TrackInfo&);
     TrackInfo trackFromVar (const juce::var&);
+
+    // Sections of a3t.json, shared with the sidecar. *FromVar skips bad items;
+    // a void or non-array input gives an empty list.
+    juce::var cuesToVar (const std::vector<Cue>&);
+    std::vector<Cue> cuesFromVar (const juce::var&);
+    juce::var loopsToVar (const std::vector<Loop>&);
+    std::vector<Loop> loopsFromVar (const juce::var&);
+    juce::var phrasesToVar (const std::vector<Phrase>&);
+    std::vector<Phrase> phrasesFromVar (const juce::var&);
+    juce::var eventsToVar (const std::vector<Event>&);
+    std::vector<Event> eventsFromVar (const juce::var&);   // capped at maxEvents
+    juce::var analysisToVar (const Analysis&);             // only the members that are set
+    Analysis analysisFromVar (const juce::var&);
+
+    // JUCE's parser recurses without a limit; check before handing it text.
+    bool nestsTooDeep (const juce::String& text);
 }
