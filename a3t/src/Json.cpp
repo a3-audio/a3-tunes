@@ -432,17 +432,19 @@ namespace a3t
         {
             constexpr int maxDepth = 64;
             int depth = 0;
-            bool inString = false, escaped = false;
+            juce::juce_wchar quote = 0;   // the character that opened the current string; 0 outside one
+            bool escaped = false;
             for (auto c : text)
             {
-                if (inString)
+                if (quote != 0)
                 {
                     if (escaped) escaped = false;
                     else if (c == '\\') escaped = true;
-                    else if (c == '"') inString = false;
+                    else if (c == quote) quote = 0;
                     continue;
                 }
-                if (c == '"') inString = true;
+                // JUCE's parser takes '...' strings as well as "...".
+                if (c == '"' || c == '\'') quote = c;
                 else if (c == '[' || c == '{') { if (++depth > maxDepth) return true; }
                 else if (c == ']' || c == '}') --depth;
             }

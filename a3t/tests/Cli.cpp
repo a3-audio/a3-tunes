@@ -536,3 +536,16 @@ TEST (Cli, MergeThatWouldExceedTheEventCapWritesNothing)
     ASSERT_TRUE (side.existsAsFile());
     EXPECT_EQ (bytesOf (side), sideBefore);
 }
+
+TEST (Cli, BuildRefusesNestingBehindASingleQuotedString)
+{
+    TempDir t;
+    const auto out = t.dir.getChildFile ("song.a3mkv");
+    auto args = buildArgs (t, out);
+    args.set (args.indexOf ("--meta") + 1, path (writeMeta (t, R"({"version":1,"x":['"',)"
+                                                                     + juce::String::repeatedString ("[", 300000))));
+    const auto r = run (t, args);
+    EXPECT_EQ (r.exitCode, 2) << r.err;
+    EXPECT_TRUE (r.err.contains ("nests too deeply")) << r.err;
+    EXPECT_FALSE (out.exists());
+}

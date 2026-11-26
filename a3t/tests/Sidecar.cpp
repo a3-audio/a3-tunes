@@ -285,3 +285,13 @@ TEST (Sidecar, FindsTheSidecarByUuidAfterARename)
     EXPECT_FALSE (findSidecarByUuid (tmp.dir, "00000000-0000-4000-8000-000000000000").has_value());
     EXPECT_FALSE (findSidecarByUuid (tmp.dir, "").has_value());
 }
+
+TEST (Sidecar, NestingBehindASingleQuotedStringIsDamaged)
+{
+    TempFolder tmp;
+    const auto file = tmp.dir.getChildFile ("t.a3events.json");
+    ASSERT_TRUE (file.replaceWithText (R"({"version":2,"x":['"',)" + juce::String::repeatedString ("[", 100000)
+                                       + juce::String::repeatedString ("]", 100000) + "]}"));
+    EXPECT_TRUE (nestsTooDeep (file.loadFileAsString()));
+    EXPECT_EQ (loadSidecar (file).status, Status::damaged);
+}

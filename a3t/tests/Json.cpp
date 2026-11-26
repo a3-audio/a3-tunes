@@ -247,3 +247,15 @@ TEST (Json, HugeFiniteValuesSurviveTheRoundTrip)
     ASSERT_EQ (again.data.events.size(), 1u);
     EXPECT_EQ (again.data.events[0].azimuth, 1e305);
 }
+
+// JUCE's parser takes single-quoted strings too: a '"' must not open a string for the depth guard.
+TEST (Json, NestingBehindASingleQuotedStringIsDamaged)
+{
+    const auto hostile = R"({"version":1,"x":['"',)" + juce::String::repeatedString ("[", 100000)
+                         + juce::String::repeatedString ("]", 100000) + "]}";
+    EXPECT_TRUE (nestsTooDeep (hostile));
+    EXPECT_EQ (parse (hostile).status, Status::damaged);
+
+    EXPECT_FALSE (nestsTooDeep (R"({"a":"it's","b":'say "[[[["',"c":'\'[[',"d":[[1]]})"));
+    EXPECT_EQ (parse (R"({"version":1,"a":"it's [[[","b":'"[[[[',"c":[1]})").status, Status::ok);
+}
