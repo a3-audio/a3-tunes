@@ -29,12 +29,17 @@ using Packet = std::unique_ptr<AVPacket, PacketFree>;
 using Frame = std::unique_ptr<AVFrame, FrameFree>;
 using Swr = std::unique_ptr<SwrContext, SwrFree>;
 
+// Containers and muxers make libav warn about harmless things on every call; only errors may speak.
+inline void quietLogs()
+{
+    static const bool quiet = [] { av_log_set_level (AV_LOG_ERROR); return true; }();
+    juce::ignoreUnused (quiet);
+}
+
 // Opens a container and reads its stream info; empty on failure.
 inline Format openFormat (const juce::File& file)
 {
-    // Containers make libav warn about harmless things on every open; only errors may speak.
-    static const bool quiet = [] { av_log_set_level (AV_LOG_ERROR); return true; }();
-    juce::ignoreUnused (quiet);
+    quietLogs();
     AVFormatContext* context = nullptr;
     if (avformat_open_input (&context, file.getFullPathName().toRawUTF8(), nullptr, nullptr) < 0)
         return {};

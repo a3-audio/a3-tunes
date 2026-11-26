@@ -1,0 +1,538 @@
+// SPDX-FileCopyrightText: 2026 Raphael Eismann
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "a3t/Audio.h"
+#include "a3t/Json.h"
+#include "a3t/Writer.h"
+#include "AvPtr.h"
+#include "TestAudio.h"
+
+#include <gtest/gtest.h>
+
+using namespace a3t;
+
+namespace
+{
+    using Channels = std::vector<std::vector<float>>;
+
+    constexpr std::array<double, numStems> stemFrequencies { 220.0, 330.0, 550.0, 770.0 };
+
+    // Five WAVs of equal length; the stems are sines at different pitches so a swap would show.
+    WriteRequest requestFor (const TempDir& t, int rate, int bits, juce::int64 frames, int originalChannels = 2,
+                             const juce::String& outputName = "out.a3mkv")
+    {
+        WriteRequest r;
+        r.original = writeTestWav (t.dir, "original.wav", rate, originalChannels, bits, frames, 440.0);
+        for (int s = 0; s < numStems; ++s)
+            r.stems[(size_t) s] = writeTestWav (t.dir, "stem" + juce::String (s) + ".wav", rate, 2, bits, frames,
+                                                stemFrequencies[(size_t) s]);
+        r.data.track.title = "Test Title";
+        r.output = t.dir.getChildFile (outputName);
+        return r;
+    }
+
+    juce::File tmpOf (const juce::File& output)
+    {
+        return juce::File (output.getFullPathName() + ".tmp");
+    }
+
+    Channels decodeAll (const juce::File& file, int track)
+    {
+        const auto d = TrackDecoder::open (file, track);
+        if (d == nullptr)
+            return {};
+        Channels all ((size_t) d->channels());
+        Channels block ((size_t) d->channels(), std::vector<float> (1000));
+        std::vector<float*> planes;
+        for (auto& b : block)
+            planes.push_back (b.data());
+        for (int n; (n = d->read (planes.data(), 1000)) > 0;)
+            for (size_t c = 0; c < all.size(); ++c)
+                all[c].insert (all[c].end(), block[c].begin(), block[c].begin() + n);
+        return all;
+    }
+
+    struct StreamView
+    {
+        AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
+        std::string codec, title, filename, mimetype, bytes;
+        bool isDefault = false;
+    };
+
+    std::string metadata (const AVDictionary* dict, const char* key)
+    {
+        const auto* entry = av_dict_get (dict, key, nullptr, 0);
+        return entry != nullptr ? entry->value : "";
+    }
+
+    std::vector<StreamView> streamsOf (const juce::File& file)
+    {
+        const auto format = av::openFormat (file);
+        std::vector<StreamView> views;
+        if (format == nullptr)
+            return views;
+        for (unsigned i = 0; i < format->nb_streams; ++i)
+        {
+            const auto& s = *format->streams[i];
+            StreamView v;
+            v.type = s.codecpar->codec_type;
+            v.codec = avcodec_get_name (s.codecpar->codec_id);
+            v.title = metadata (s.metadata, "title");
+            v.filename = metadata (s.metadata, "filename");
+            v.mimetype = metadata (s.metadata, "mimetype");
+            v.isDefault = (s.disposition & AV_DISPOSITION_DEFAULT) != 0;
+            if (s.codecpar->extradata_size > 0)
+                v.bytes.assign ((const char*) s.codecpar->extradata, (size_t) s.codecpar->extradata_size);
+            else if (s.attached_pic.size > 0)
+                v.bytes.assign ((const char*) s.attached_pic.data, (size_t) s.attached_pic.size);
+            views.push_back (std::move (v));
+        }
+        return views;
+    }
+
+    std::vector<StreamView> audioStreamsOf (const juce::File& file)
+    {
+        std::vector<StreamView> audio;
+        for (auto& v : streamsOf (file))
+            if (v.type == AVMEDIA_TYPE_AUDIO)
+                audio.push_back (v);
+        return audio;
+    }
+
+    const StreamView* attachmentNamed (const std::vector<StreamView>& streams, const std::string& name)
+    {
+        for (const auto& v : streams)
+            if (v.filename == name)
+                return &v;
+        return nullptr;
+    }
+
+    // The first `count` packets of one audio track, as raw bytes.
+    std::vector<std::string> packetsOf (const juce::File& file, int track, int count)
+    {
+        const auto format = av::openFormat (file);
+        std::vector<std::string> packets;
+        if (format == nullptr)
+            return packets;
+        const auto index = av::audioStreamIndex (*format, track);
+        av::Packet packet { av_packet_alloc() };
+        while ((int) packets.size() < count && av_read_frame (format.get(), packet.get()) >= 0)
+        {
+            if (packet->stream_index == index)
+                packets.emplace_back ((const char*) packet->data, (size_t) packet->size);
+            av_packet_unref (packet.get());
+        }
+        return packets;
+    }
+
+    juce::MemoryBlock bytesOf (const juce::File& f)
+    {
+        juce::MemoryBlock block;
+        f.loadFileAsData (block);
+        return block;
+    }
+
+    Cue hotCue (int slot, double time, const char* name)
+    {
+        Cue c;
+        c.kind = Cue::Kind::hot;
+        c.slot = slot;
+        c.time = time;
+        c.name = name;
+        return c;
+    }
+
+    // A stereo 24-bit FLAC written straight through libav at compression level 0, which the writer's
+    // encoder (default level) never produces: packets equal to these were copied, not re-encoded.
+    juce::File writeTestFlac (const juce::File& dir, const juce::String& name, int rate, juce::int64 frames,
+                              int blockSize)
+    {
+        const auto file = dir.getChildFile (name);
+        const auto path = file.getFullPathName().toStdString();
+        const auto* codec = avcodec_find_encoder (AV_CODEC_ID_FLAC);
+        av::Codec encoder { avcodec_alloc_context3 (codec) };
+        encoder->sample_fmt = AV_SAMPLE_FMT_S32;
+        encoder->bits_per_raw_sample = 24;
+        encoder->sample_rate = rate;
+        encoder->time_base = { 1, rate };
+        encoder->frame_size = blockSize;
+        encoder->compression_level = 0;
+        av_channel_layout_default (&encoder->ch_layout, 2);
+        if (avcodec_open2 (encoder.get(), codec, nullptr) < 0)
+            return {};
+
+        AVFormatContext* out = nullptr;
+        avformat_alloc_output_context2 (&out, nullptr, "flac", path.c_str());
+        auto* stream = avformat_new_stream (out, nullptr);
+        avcodec_parameters_from_context (stream->codecpar, encoder.get());
+        stream->time_base = encoder->time_base;
+        if (avio_open (&out->pb, path.c_str(), AVIO_FLAG_WRITE) < 0 || avformat_write_header (out, nullptr) < 0)
+        {
+            avio_closep (&out->pb);
+            avformat_free_context (out);
+            return {};
+        }
+
+        av::Frame frame { av_frame_alloc() };
+        av::Packet packet { av_packet_alloc() };
+        const auto drain = [&]
+        {
+            while (avcodec_receive_packet (encoder.get(), packet.get()) >= 0)
+            {
+                av_packet_rescale_ts (packet.get(), encoder->time_base, stream->time_base);
+                av_interleaved_write_frame (out, packet.get());
+            }
+        };
+        for (juce::int64 position = 0; position < frames; position += blockSize)
+        {
+            const auto count = (int) std::min<juce::int64> (blockSize, frames - position);
+            av_frame_unref (frame.get());
+            frame->nb_samples = count;
+            frame->format = AV_SAMPLE_FMT_S32;
+            frame->sample_rate = rate;
+            frame->pts = position;
+            av_channel_layout_copy (&frame->ch_layout, &encoder->ch_layout);
+            av_frame_get_buffer (frame.get(), 0);
+            auto* samples = reinterpret_cast<int32_t*> (frame->data[0]);
+            for (int i = 0; i < count; ++i)
+            {
+                const auto phase = 2.0 * juce::MathConstants<double>::pi * 330.0 * (double) (position + i) / rate;
+                samples[2 * i] = samples[2 * i + 1] = (int32_t) std::lround (0.5 * std::sin (phase) * 8388607.0) * 256;
+            }
+            avcodec_send_frame (encoder.get(), frame.get());
+            drain();
+        }
+        avcodec_send_frame (encoder.get(), nullptr);
+        drain();
+        av_write_trailer (out);
+        avio_closep (&out->pb);
+        avformat_free_context (out);
+        return file;
+    }
+
+    constexpr unsigned char tinyPng[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00,
+        0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01,
+        0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
+        0x82
+    };
+}
+
+TEST (Writer, WritesFiveAudioTracksInOrder)
+{
+    TempDir t;
+    const auto r = requestFor (t, 44100, 24, 10000);
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    const auto audio = audioStreamsOf (r.output);
+    ASSERT_EQ (audio.size(), 5u);
+    const char* names[] = { "Original", "Stem 1", "Stem 2", "Stem 3", "Stem 4" };
+    for (size_t i = 0; i < 5; ++i)
+    {
+        EXPECT_EQ (audio[i].title, names[i]);
+        EXPECT_EQ (audio[i].isDefault, i == 0) << i;
+    }
+}
+
+TEST (Writer, StemsAreFlacAndOriginalIsCopied)
+{
+    TempDir t;
+    const auto r = requestFor (t, 44100, 24, 10000);
+    ASSERT_TRUE (writeTrack (r).ok);
+    const auto audio = audioStreamsOf (r.output);
+    ASSERT_EQ (audio.size(), 5u);
+    EXPECT_EQ (audio[0].codec, probeAudio (r.original)->codecName.toStdString());
+    EXPECT_EQ (audio[0].codec, "pcm_s24le");
+    for (size_t i = 1; i < 5; ++i)
+        EXPECT_EQ (audio[i].codec, "flac") << i;
+    EXPECT_EQ (decodeAll (r.output, 0), decodeAll (r.original, 0));
+}
+
+TEST (Writer, AudioSurvivesBitExactInKeepMode)
+{
+    for (const int bits : { 16, 24 })
+    {
+        TempDir t;
+        const auto r = requestFor (t, 44100, bits, 10000);
+        ASSERT_TRUE (writeTrack (r).ok) << bits;
+        for (int s = 0; s < numStems; ++s)
+        {
+            const auto written = decodeAll (r.output, s + 1);
+            ASSERT_EQ (written.size(), 2u);
+            EXPECT_EQ (written, decodeAll (r.stems[(size_t) s], 0)) << bits << " stem " << s;
+            EXPECT_EQ (probeAudio (r.output, s + 1)->bitDepth, bits) << s;
+        }
+    }
+}
+
+TEST (Writer, ConvertGivesFlac44k24ForAll)
+{
+    TempDir t;
+    auto r = requestFor (t, 48000, 16, 24000);
+    r.convert = ConvertTarget::flac44k24();
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    const auto audio = audioStreamsOf (r.output);
+    ASSERT_EQ (audio.size(), 5u);
+    for (int i = 0; i < 5; ++i)
+    {
+        const auto info = probeAudio (r.output, i);
+        ASSERT_TRUE (info.has_value());
+        EXPECT_EQ (info->sampleRate, 44100) << i;
+        EXPECT_EQ (info->bitDepth, 24) << i;
+        EXPECT_EQ (info->codecName, "flac") << i;
+        EXPECT_EQ (countFrames (r.output, i), juce::int64 (22050)) << i;
+    }
+}
+
+TEST (Writer, UnequalLengthsAreRefusedAndNothingIsWritten)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.stems[2] = writeTestWav (t.dir, "long.wav", 44100, 2, 16, 10007, 550.0);
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.contains ("10000")) << result.error;
+    EXPECT_TRUE (result.error.contains ("10007")) << result.error;
+    EXPECT_FALSE (r.output.exists());
+    EXPECT_FALSE (tmpOf (r.output).exists());
+}
+
+TEST (Writer, DifferentRatesAreRefusedWhenKeeping)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.stems[1] = writeTestWav (t.dir, "fast.wav", 48000, 2, 16, 10000, 330.0);
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.contains ("48000")) << result.error;
+    EXPECT_FALSE (r.output.exists());
+}
+
+TEST (Writer, AFailingVerifyLeavesTheOldFileUntouched)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.output.replaceWithText ("the old file");
+    const auto before = bytesOf (r.output);
+    r.stems[3] = t.dir.getChildFile ("missing.wav");
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_FALSE (result.error.isEmpty());
+    EXPECT_EQ (bytesOf (r.output), before);
+    EXPECT_FALSE (tmpOf (r.output).exists());
+}
+
+TEST (Writer, AStaleTmpIsReplacedAndRemoved)
+{
+    TempDir t;
+    const auto r = requestFor (t, 44100, 16, 10000);
+    tmpOf (r.output).replaceWithText ("left over from a crash");
+    ASSERT_TRUE (writeTrack (r).ok);
+    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_EQ (audioStreamsOf (r.output).size(), 5u);
+}
+
+// The file is complete and verified, and the last step still fails: the temporary file goes too.
+TEST (Writer, AFailedRenameRemovesTheTmp)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.output = t.dir.getChildFile ("taken");
+    ASSERT_TRUE (r.output.createDirectory());
+    ASSERT_TRUE (r.output.getChildFile ("inside").replaceWithText ("a directory that is not empty"));
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.contains ("rename")) << result.error;
+    EXPECT_TRUE (r.output.getChildFile ("inside").existsAsFile());
+    EXPECT_FALSE (tmpOf (r.output).exists());
+}
+
+TEST (Writer, A3tJsonIsAnAttachmentAndParses)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 24, 10000);
+    r.data.track.artist = "Someone";
+    r.data.revision = 3;
+    r.data.cues = { hotCue (0, 0.1, "drop") };
+    ASSERT_TRUE (r.data.uuid.isEmpty());
+    ASSERT_TRUE (writeTrack (r).ok);
+
+    const auto streams = streamsOf (r.output);
+    const auto* json = attachmentNamed (streams, "a3t.json");
+    ASSERT_NE (json, nullptr);
+    EXPECT_EQ (json->type, AVMEDIA_TYPE_ATTACHMENT);
+    EXPECT_EQ (json->mimetype, "application/json");
+    const auto loaded = parse (juce::String::fromUTF8 (json->bytes.data(), (int) json->bytes.size()));
+    ASSERT_EQ (loaded.status, Status::ok);
+
+    const auto& audio = loaded.data.track.audio;
+    EXPECT_EQ (loaded.data.uuid.length(), 36);
+    EXPECT_EQ (audio.sampleRate, 44100);
+    EXPECT_EQ (audio.bitDepth, 24);
+    EXPECT_EQ (audio.channels, 2);
+    EXPECT_EQ (audio.codec, "pcm_s24le");
+    EXPECT_NEAR (audio.lengthSeconds, 10000.0 / 44100.0, 1e-9);
+
+    auto expected = r.data;
+    expected.uuid = loaded.data.uuid;
+    expected.track.audio = audio;
+    EXPECT_TRUE (loaded.data == expected);
+}
+
+TEST (Writer, AGivenUuidIsKept)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.data.uuid = "01234567-89ab-cdef-0123-456789abcdef";
+    ASSERT_TRUE (writeTrack (r).ok);
+    const auto streams = streamsOf (r.output);
+    const auto* json = attachmentNamed (streams, "a3t.json");
+    ASSERT_NE (json, nullptr);
+    EXPECT_EQ (parse (juce::String::fromUTF8 (json->bytes.data(), (int) json->bytes.size())).data.uuid,
+               r.data.uuid);
+}
+
+TEST (Writer, TagsAndChaptersAreWritten)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.data.cues = { hotCue (0, 0.05, "in"), hotCue (1, 0.1, "drop") };
+    ASSERT_TRUE (writeTrack (r).ok);
+    const auto format = av::openFormat (r.output);
+    ASSERT_NE (format, nullptr);
+    EXPECT_EQ (metadata (format->metadata, "TITLE"), "Test Title");
+    ASSERT_EQ (format->nb_chapters, 2u);
+    EXPECT_EQ (metadata (format->chapters[0]->metadata, "title"), "A: in");
+    EXPECT_EQ (metadata (format->chapters[1]->metadata, "title"), "B: drop");
+    EXPECT_NEAR (format->chapters[0]->start * av_q2d (format->chapters[0]->time_base), 0.05, 1e-6);
+}
+
+TEST (Writer, ChaptersStayInsideTheTrack)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);   // 0.2268 s
+    r.data.cues = { hotCue (0, 0.05, "in"), hotCue (1, 5.0, "past the end"), hotCue (20, 0.2265, "odd slot") };
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    const auto format = av::openFormat (r.output);
+    ASSERT_NE (format, nullptr);
+    ASSERT_EQ (format->nb_chapters, 2u);
+    EXPECT_EQ (metadata (format->chapters[1]->metadata, "title"), "odd slot");
+    for (unsigned i = 0; i < format->nb_chapters; ++i)
+        EXPECT_LE (format->chapters[i]->end * av_q2d (format->chapters[i]->time_base), 10000.0 / 44100.0 + 1e-9);
+}
+
+TEST (Writer, MonoOriginalAnd96kAreAccepted)
+{
+    TempDir t;
+    const auto r = requestFor (t, 96000, 24, 20000, 1);
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    const auto original = probeAudio (r.output, 0);
+    ASSERT_TRUE (original.has_value());
+    EXPECT_EQ (original->channels, 1);
+    EXPECT_EQ (original->sampleRate, 96000);
+    for (int i = 1; i < 5; ++i)
+        EXPECT_EQ (probeAudio (r.output, i)->sampleRate, 96000) << i;
+    EXPECT_EQ (decodeAll (r.output, 0), decodeAll (r.original, 0));
+}
+
+TEST (Writer, OddOutputNamesWork)
+{
+    TempDir t;
+    const auto r = requestFor (t, 44100, 16, 10000, 2, juce::String::fromUTF8 ("a b.c.d \xc3\xa9"));
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_TRUE (r.output.existsAsFile());
+    EXPECT_EQ (audioStreamsOf (r.output).size(), 5u);
+    EXPECT_FALSE (tmpOf (r.output).exists());
+}
+
+TEST (Writer, CoverIsAnAttachment)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.cover = t.dir.getChildFile ("folder art.png");
+    r.cover.replaceWithData (tinyPng, sizeof (tinyPng));
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    const auto streams = streamsOf (r.output);
+    const auto* cover = attachmentNamed (streams, "cover.png");
+    ASSERT_NE (cover, nullptr);
+    EXPECT_EQ (cover->mimetype, "image/png");
+    EXPECT_EQ (cover->bytes, std::string ((const char*) tinyPng, sizeof (tinyPng)));
+    EXPECT_EQ (audioStreamsOf (r.output).size(), 5u);
+}
+
+TEST (Writer, ACoverThatIsNoImageIsRefused)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.cover = t.dir.getChildFile ("cover.jpg");
+    r.cover.replaceWithText ("not a picture");
+    EXPECT_FALSE (writeTrack (r).ok);
+    EXPECT_FALSE (r.output.exists());
+    EXPECT_FALSE (tmpOf (r.output).exists());
+}
+
+// Stems are what StemDeck seeks in; FLAC in Matroska must land on the exact sample.
+TEST (Writer, FlacStemsSeekSampleExactly)
+{
+    TempDir t;
+    const auto r = requestFor (t, 44100, 24, 30000);
+    ASSERT_TRUE (writeTrack (r).ok);
+    const auto straight = decodeAll (r.output, 1);
+    ASSERT_EQ (straight.size(), 2u);
+    ASSERT_EQ (straight[0].size(), 30000u);
+
+    // 3968 is one frame before a block that starts at exactly 90 ms; 29990 lies past Matroska's
+    // millisecond-rounded duration (29988 frames) but inside the audio.
+    for (const juce::int64 frame : { 1, 3968, 3969, 7777, 29990, 30000 })
+    {
+        auto d = TrackDecoder::open (r.output, 1);
+        ASSERT_NE (d, nullptr);
+        ASSERT_TRUE (d->seek (frame)) << frame;
+        std::vector<float> left (64), right (64);
+        float* planes[] = { left.data(), right.data() };
+        const auto n = d->read (planes, 64);
+        ASSERT_EQ (n, (int) std::min<juce::int64> (64, 30000 - frame)) << frame;
+        ASSERT_FALSE (d->failed());
+        for (int i = 0; i < n; ++i)
+        {
+            EXPECT_EQ (left[(size_t) i], straight[0][(size_t) (frame + i)]) << frame << "+" << i;
+            EXPECT_EQ (right[(size_t) i], straight[1][(size_t) (frame + i)]) << frame << "+" << i;
+        }
+    }
+    auto d = TrackDecoder::open (r.output, 1);
+    ASSERT_NE (d, nullptr);
+    EXPECT_FALSE (d->seek (30001));
+}
+
+TEST (Writer, AFlacStemWithMillisecondBlocksIsCopied)
+{
+    for (const bool convert : { false, true })
+    {
+        TempDir t;
+        auto r = requestFor (t, 44100, 24, 20000);
+        r.stems[0] = writeTestFlac (t.dir, "stem.flac", 44100, 20000, 3969);   // 90 ms blocks
+        if (convert)
+            r.convert = ConvertTarget::flac44k24();
+        const auto result = writeTrack (r);
+        ASSERT_TRUE (result.ok) << result.error;
+        EXPECT_EQ (packetsOf (r.output, 1, 5), packetsOf (r.stems[0], 0, 5)) << convert;
+        EXPECT_EQ (decodeAll (r.output, 1), decodeAll (r.stems[0], 0)) << convert;
+    }
+}
+
+// Blocks that start between two milliseconds would make the stem unseekable to the sample: re-encoded, losslessly.
+TEST (Writer, AFlacStemWithOtherBlocksIsReEncoded)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 24, 20000);
+    r.stems[0] = writeTestFlac (t.dir, "stem.flac", 44100, 20000, 4096);
+    const auto result = writeTrack (r);
+    ASSERT_TRUE (result.ok) << result.error;
+    EXPECT_NE (packetsOf (r.output, 1, 5), packetsOf (r.stems[0], 0, 5));
+    EXPECT_EQ (decodeAll (r.output, 1), decodeAll (r.stems[0], 0));
+}

@@ -190,13 +190,14 @@ struct TrackDecoder::Impl
         return true;
     }
 
+    // The declared length is no limit here: Matroska rounds it to whole milliseconds, so the last few
+    // frames of a stem lie past it. Decoding decides whether the target exists.
     bool seekTo (juce::int64 frameIndex)
     {
-        if (length > 0 && frameIndex > length)
-            return false;
         const auto& stream = *format->streams[streamIndex];
         const auto start = stream.start_time == AV_NOPTS_VALUE ? 0 : stream.start_time;
-        const auto ts = start + av_rescale_q (frameIndex, AVRational { 1, rate }, stream.time_base);
+        // Rounded down: a coarse time base (Matroska's milliseconds) rounded up can name a block that starts after the target.
+        const auto ts = start + av_rescale_q_rnd (frameIndex, AVRational { 1, rate }, stream.time_base, AV_ROUND_DOWN);
         if (av_seek_frame (format.get(), streamIndex, ts, AVSEEK_FLAG_BACKWARD) < 0)
             return false;
         avcodec_flush_buffers (codec.get());
@@ -212,9 +213,13 @@ struct TrackDecoder::Impl
             return false;
         // Decode up to the first frame now: only its position says whether the target can be met.
         while (! aligned && decodeSome()) {}
-        if (aligned)
-            return ! alignFailed;
-        return frameIndex == 0 || frameIndex == length;   // nothing left to decode is a valid place to stand
+        if (! aligned)
+            return frameIndex == 0 || frameIndex == length;   // nothing left to decode is a valid place to stand
+        if (alignFailed)
+            return false;
+        // Then up to the target itself: the end of the stream before it means the target is past the end.
+        while (skip > 0 && decodeSome()) {}
+        return skip == 0;
     }
 
     int read (float* const* out, int numFrames)
