@@ -156,10 +156,29 @@ namespace a3t
             && juce::JSON::toString (a.raw, true) == juce::JSON::toString (b.raw, true);
     }
 
+    namespace
+    {
+        // An event of a type this version does not know is kept whole, so a
+        // newer file loses nothing on a round trip; stem and beat only place it.
+        Event unknownEventFrom (const juce::var& v)
+        {
+            Event e;
+            e.type = EventType::unknown;
+            e.stem = stemFrom (v["stem"]).value_or (0);
+            e.beat = finiteNumber (v["beat"]).value_or (0.0);
+            e.active = v.hasProperty ("active") ? (bool) v["active"] : true;
+            e.raw = v;
+            return e;
+        }
+    }
+
     std::optional<Event> eventFromVar (const juce::var& v)
     {
         if (! v.isObject())
             return std::nullopt;
+        if (typeFrom (v) == EventType::unknown)
+            return unknownEventFrom (v);
+
         const auto stem = stemFrom (v["stem"]);
         const auto beat = finiteNumber (v["beat"]);
         const auto origin = originFrom (v);

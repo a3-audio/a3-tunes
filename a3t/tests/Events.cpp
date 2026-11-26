@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 using namespace a3t;
 
 namespace
@@ -208,4 +210,56 @@ TEST (Events, HomePoseIsTheLastPositionEventAtOrBeforeTheBeat)
     EXPECT_EQ (homePoseAt (ev, 0, 20, def).elevation, 2.0);
     EXPECT_EQ (homePoseAt (ev, 1, 16, def).azimuth, 1.0);
     EXPECT_EQ (homePoseAt ({}, 0, 16, HomePose {}).azimuth, 0.0);
+}
+
+TEST (Events, UnknownTypeWithoutStemOrBeatIsKept)
+{
+    for (const char* json : { R"({"type":"glide","x":1})",
+                              R"({"type":"glide","stem":9,"beat":"x","origin":"nobody"})" })
+    {
+        const auto v = parse (json);
+        const auto e = eventFromVar (v);
+        ASSERT_TRUE (e.has_value()) << json;
+        EXPECT_EQ (e->type, EventType::unknown);
+        EXPECT_EQ (e->stem, 0);
+        EXPECT_EQ (e->beat, 0.0);
+        EXPECT_EQ (juce::JSON::toString (toVar (*e), true), juce::JSON::toString (v, true));
+    }
+}
+
+TEST (Events, UnknownTypeWithoutStemStillAddsToTheList)
+{
+    EventList list;
+    EXPECT_EQ (list.add (*eventFromVar (parse (R"({"type":"glide"})"))), EventList::Add::added);
+    EXPECT_EQ (list.add (*eventFromVar (parse (R"({"type":"glide"})"))), EventList::Add::added);
+}
+
+TEST (Events, BadShapeIsSkipped)
+{
+    auto v = parse (v1Shot);
+    v.getDynamicObject()->setProperty ("shape", "spiral");
+    EXPECT_FALSE (eventFromVar (v).has_value());
+}
+
+TEST (Events, BadOriginOnAKnownTypeIsSkipped)
+{
+    auto v = parse (v1Shot);
+    v.getDynamicObject()->setProperty ("origin", "nobody");
+    EXPECT_FALSE (eventFromVar (v).has_value());
+}
+
+TEST (Events, MissingOriginDefaultsToHand)
+{
+    const auto e = eventFromVar (parse (R"({"type":"resetpos","stem":0,"beat":1})"));
+    ASSERT_TRUE (e.has_value());
+    EXPECT_EQ (e->origin, Origin::hand);
+}
+
+TEST (Events, NonFiniteBeatOnAKnownTypeIsSkipped)
+{
+    auto v = parse (v1Shot);
+    v.getDynamicObject()->setProperty ("beat", std::numeric_limits<double>::infinity());
+    EXPECT_FALSE (eventFromVar (v).has_value());
+    v.getDynamicObject()->setProperty ("beat", std::numeric_limits<double>::quiet_NaN());
+    EXPECT_FALSE (eventFromVar (v).has_value());
 }

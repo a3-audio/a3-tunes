@@ -69,6 +69,7 @@ namespace a3t
         double azimuth = 0.0, elevation = 0.0;
     };
 
+    // `events` must be sorted as EventList sorts it: the scan runs backwards.
     // The last active position event of the stem at or before the beat;
     // a resetpos (or none) gives the stem's default.
     HomePose homePoseAt (const std::vector<Event>&, int stem, double beat, HomePose stemDefault);
