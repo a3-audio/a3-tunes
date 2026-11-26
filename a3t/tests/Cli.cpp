@@ -337,12 +337,12 @@ TEST (Cli, MergeWithNothingToMergeIsANoOp)
     const auto file = built (t);
     const auto side = rigRated (file, 0);   // the file's own rating: no difference
     const auto fileBefore = bytesOf (file);
-    const auto sideBefore = bytesOf (side);
     const auto r = run (t, { "merge", path (file), "--take", "all" });
     EXPECT_EQ (r.exitCode, 0) << r.err;
-    EXPECT_TRUE (r.err.contains ("nothing to merge")) << r.err;
+    // A sidecar equal to the file would later override newer laptop edits on the rig.
+    EXPECT_TRUE (r.err.contains ("nothing to merge; the sidecar matched the file and was removed")) << r.err;
     EXPECT_EQ (bytesOf (file), fileBefore);
-    EXPECT_EQ (bytesOf (side), sideBefore);
+    EXPECT_FALSE (side.exists());
     EXPECT_EQ (openTrack (file).data.revision, 1);
 }
 
@@ -548,4 +548,58 @@ TEST (Cli, BuildRefusesNestingBehindASingleQuotedString)
     EXPECT_EQ (r.exitCode, 2) << r.err;
     EXPECT_TRUE (r.err.contains ("nests too deeply")) << r.err;
     EXPECT_FALSE (out.exists());
+}
+
+namespace
+{
+    // The rig's sidecar with `body` added at the top level (after based_on).
+    juce::File rigSidecarWith (const juce::File& file, const juce::String& body)
+    {
+        const auto side = sidecarFileFor (file);
+        side.replaceWithText (R"({"version":2,"based_on":{"uuid":")" + openTrack (file).data.uuid
+                              + R"(","revision":1},)" + body + "}");
+        return side;
+    }
+}
+
+TEST (Cli, MergeKeepsASidecarWithUnknownKeys)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigSidecarWith (file, R"("track":{"rating":5},"future":{"a":1},"analysis":{"later":2})");
+    const auto r = run (t, { "merge", path (file), "--take", "all" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_EQ (openTrack (file).data.track.rating, 5);
+    EXPECT_EQ (openTrack (file).data.revision, 2);
+    ASSERT_TRUE (side.existsAsFile());
+    EXPECT_TRUE (r.err.contains ("merged; sidecar kept: it holds keys this a3t does not know: future, analysis.later"))
+        << r.err;
+}
+
+TEST (Cli, NothingToMergeKeepsASidecarWithUnknownKeys)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigSidecarWith (file, R"("track":{"rating":0},"future":1)");
+    const auto fileBefore = bytesOf (file);
+    const auto sideBefore = bytesOf (side);
+    const auto r = run (t, { "merge", path (file), "--take", "all" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_TRUE (r.err.contains ("nothing to merge; sidecar kept: it holds keys this a3t does not know: future")) << r.err;
+    EXPECT_EQ (bytesOf (file), fileBefore);
+    ASSERT_TRUE (side.existsAsFile());
+    EXPECT_EQ (bytesOf (side), sideBefore);
+}
+
+TEST (Cli, MergeTakesTheRigsStems)
+{
+    TempDir t;
+    const auto file = built (t);
+    const auto side = rigSidecarWith (file, R"("stems":[{"label":"Drums","colour":"#ff0000"}])");
+    const auto list = run (t, { "merge", path (file), "--list" });
+    EXPECT_TRUE (list.out.startsWith ("stems\tchanged\t")) << list.out;
+    const auto r = run (t, { "merge", path (file), "--take", "stems" });
+    EXPECT_EQ (r.exitCode, 0) << r.err;
+    EXPECT_EQ (openTrack (file).data.stems[0].label, "Drums");
+    EXPECT_FALSE (side.exists());
 }

@@ -286,6 +286,7 @@ namespace
         a3t::A3tData laptop;
         a3t::Sidecar rig;
         juce::File sidecarFile;
+        juce::MemoryBlock sidecarBytes;   // as read, so a sidecar the rig rewrote meanwhile is never deleted
         juce::String error;
     };
 
@@ -311,6 +312,8 @@ namespace
             }
             in.sidecarFile = *byUuid;
         }
+        // Read before parsing: a change in between then makes the bytes differ at delete time.
+        in.sidecarFile.loadFileAsData (in.sidecarBytes);
         const auto loaded = a3t::loadSidecar (in.sidecarFile);
         if (loaded.status != a3t::Status::ok)
             in.error = "the sidecar is " + statusName (loaded.status) + ": " + in.sidecarFile.getFullPathName();
@@ -372,6 +375,25 @@ namespace
         return chosen;
     }
 
+    // After a merge (or an empty one) the sidecar has nothing left to say, unless it holds keys this
+    // a3t cannot carry into the file, or the rig rewrote it meanwhile: then it stays.
+    int retireSidecar (const MergeInput& in, const juce::String& what, const juce::String& removedNote)
+    {
+        const auto unknown = in.rig.unknownKeyNames();
+        if (! unknown.isEmpty())
+        {
+            std::cerr << "a3t: " << what << "; sidecar kept: it holds keys this a3t does not know: "
+                      << unknown.joinIntoString (", ") << "\n";
+            return exitOk;
+        }
+        if (! a3t::deleteSidecarIfUnchanged (in.sidecarFile, in.sidecarBytes))
+            return failure (what + ", but the sidecar changed meanwhile (or cannot be removed) and was kept: "
+                            + in.sidecarFile.getFullPathName());
+        if (removedNote.isNotEmpty())
+            std::cerr << "a3t: " << what << "; " << removedNote << "\n";
+        return exitOk;
+    }
+
     int merge (const juce::StringArray& args)
     {
         const auto options = parseOptions (args, { "--take" }, { "--list" });
@@ -405,10 +427,7 @@ namespace
         if (error.isNotEmpty())
             return failure (error);
         if (changes.empty())
-        {
-            std::cerr << "a3t: nothing to merge\n";
-            return exitOk;
-        }
+            return retireSidecar (in, "nothing to merge", "the sidecar matched the file and was removed");
         if (take == "none")
             return exitOk;
 
@@ -416,10 +435,8 @@ namespace
         const auto written = a3t::rewriteMetadata (file, merged);
         if (! written.ok)
             return failure (written.error);
-        // Only after the file is safely rewritten: an empty sidecar deletes its file.
-        if (! a3t::saveSidecar (in.sidecarFile, a3t::Sidecar()))
-            return failure ("merged, but the sidecar could not be removed: " + in.sidecarFile.getFullPathName());
-        return exitOk;
+        // Only after the file is safely rewritten.
+        return retireSidecar (in, "merged", {});
     }
 
     // --- seekbench ------------------------------------------------------------------------------
