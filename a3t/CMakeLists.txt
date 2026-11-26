@@ -13,11 +13,11 @@ target_compile_definitions(a3t-juce INTERFACE $<TARGET_PROPERTY:a3t-juce,COMPILE
 target_include_directories(a3t-juce INTERFACE $<TARGET_PROPERTY:a3t-juce,INCLUDE_DIRECTORIES>)
 target_link_libraries(a3t-juce INTERFACE ZLIB::ZLIB)
 
-add_library(a3t STATIC src/Model.cpp src/Events.cpp src/Json.cpp src/Sidecar.cpp src/Merge.cpp src/Derived.cpp src/Audio.cpp src/MkvMuxer.cpp src/TrackSource.cpp src/Writer.cpp)
+add_library(a3t STATIC src/Model.cpp src/Events.cpp src/Json.cpp src/Sidecar.cpp src/Merge.cpp src/Derived.cpp src/Audio.cpp src/MkvMuxer.cpp src/TrackSource.cpp src/Writer.cpp src/Reader.cpp)
 target_include_directories(a3t PUBLIC include)
 target_link_libraries(a3t PUBLIC a3t-juce PkgConfig::LIBAV)
 
-add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp tests/Model.cpp tests/Json.cpp tests/Sidecar.cpp tests/Merge.cpp tests/Derived.cpp tests/Audio.cpp tests/Writer.cpp)
+add_executable(a3t-tests tests/Smoke.cpp tests/Events.cpp tests/Model.cpp tests/Json.cpp tests/Sidecar.cpp tests/Merge.cpp tests/Derived.cpp tests/Audio.cpp tests/Writer.cpp tests/Reader.cpp)
 target_link_libraries(a3t-tests PRIVATE a3t GTest::gtest_main)
 # The writer tests inspect the container through the internal libav helpers.
 target_include_directories(a3t-tests PRIVATE src)
