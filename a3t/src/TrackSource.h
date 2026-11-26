@@ -36,4 +36,9 @@ int millisecondBlockSize (int sampleRate);
 
 // The first audio stream is FLAC whose fixed block size starts every frame on a whole millisecond.
 bool hasMillisecondFlacBlocks (const juce::File&);
+
+// Frames a packet copy into Matroska would add at the start: the decoder skips them in the source
+// (an MP3's LAME delay, as skip-samples side data), but Matroska carries only what initial_padding
+// says (its CodecDelay). 0 when nothing is lost or the file cannot be read.
+juce::int64 startTrimLostByCopy (const juce::File&);
 }

@@ -7,7 +7,12 @@
 #include "a3t/Json.h"
 #include "MkvMuxer.h"
 #include "TrackSource.h"
+#include "WriterTesting.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +20,8 @@
 
 namespace a3t
 {
+bool testing::refuseLossyCopyUpFront = true;
+
 namespace
 {
     constexpr int numTracks = numStems + 1;
@@ -35,12 +42,67 @@ namespace
         juce::MemoryBlock bytes;
     };
 
-    // Deletes the temporary file unless it has been renamed into place.
-    struct TemporaryFile
+    // A file beside the output under a random name, created exclusively so that no existing file is
+    // ever taken over, and removed again unless it was renamed into place. Only a file this object
+    // created is ever deleted.
+    class TemporaryFile
     {
-        explicit TemporaryFile (juce::File f) : file (std::move (f)) { file.deleteFile(); }
-        ~TemporaryFile() { file.deleteFile(); }
+    public:
+        explicit TemporaryFile (const juce::File& output)
+        {
+            constexpr int attempts = 16;
+            for (int i = 0; i < attempts && ! created; ++i)
+            {
+                const auto random = juce::String::toHexString (juce::Random::getSystemRandom().nextInt64());
+                const juce::File candidate (output.getFullPathName() + "." + random + ".a3tmp");
+                const auto fd = ::open (candidate.getFullPathName().toRawUTF8(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+                if (fd >= 0)
+                {
+                    ::close (fd);
+                    file = candidate;
+                    created = true;
+                }
+                else if (errno != EEXIST)
+                    return;
+            }
+        }
+
+        ~TemporaryFile()
+        {
+            if (created)
+                file.deleteFile();
+        }
+
+        TemporaryFile (const TemporaryFile&) = delete;
+        TemporaryFile& operator= (const TemporaryFile&) = delete;
+
+        bool exists() const { return created; }
+        const juce::File& path() const { return file; }
+
+        // On disk first, then rename(2), which replaces the target in one step (JUCE's moveFileTo
+        // deletes it first). FAT, as on most USB sticks, is not atomic about it anyway.
+        juce::String moveTo (const juce::File& target)
+        {
+            if (! flushToDisk())
+                return "cannot flush " + file.getFullPathName() + ": " + juce::String (std::strerror (errno));
+            if (std::rename (file.getFullPathName().toRawUTF8(), target.getFullPathName().toRawUTF8()) != 0)
+                return "cannot rename into place: " + juce::String (std::strerror (errno));
+            created = false;
+            return {};
+        }
+
+    private:
+        bool flushToDisk() const
+        {
+            const auto fd = ::open (file.getFullPathName().toRawUTF8(), O_WRONLY | O_CLOEXEC);
+            if (fd < 0)
+                return false;
+            const auto synced = ::fsync (fd) == 0;
+            return ::close (fd) == 0 && synced;
+        }
+
         juce::File file;
+        bool created = false;
     };
 
     juce::String readInputs (const WriteRequest& request, Inputs& inputs)
@@ -263,8 +325,32 @@ namespace
         return parse (text).status == Status::ok ? juce::String() : "a3t.json does not parse";
     }
 
+    juce::String lossyCopyAdvice (const juce::String& codec, juce::int64 copiedFrames, juce::int64 stemFrames)
+    {
+        return "the original (" + codec + ") decodes to " + juce::String (copiedFrames)
+               + " frames once copied into Matroska, the stems to " + juce::String (stemFrames)
+               + " (encoder delay and padding cannot be copied); write with conversion (ConvertTarget::flac44k24())";
+    }
+
+    // Every track as long as the target; a copied original that alone differs gets the conversion advice.
+    juce::String checkLengths (const juce::File& file, juce::int64 frames, const std::optional<juce::String>& copiedCodec)
+    {
+        std::array<juce::int64, numTracks> counted {};
+        for (int i = 0; i < numTracks; ++i)
+            counted[(size_t) i] = countFrames (file, i).value_or (-1);
+        const auto stemsRight = std::all_of (counted.begin() + 1, counted.end(),
+                                             [frames] (juce::int64 n) { return n == frames; });
+        if (copiedCodec && stemsRight && counted[0] != frames && counted[0] >= 0)
+            return lossyCopyAdvice (*copiedCodec, counted[0], frames);
+        for (size_t i = 0; i < counted.size(); ++i)
+            if (counted[i] != frames)
+                return trackNames[i] + " was written " + juce::String (counted[i]) + " frames long, not "
+                       + juce::String (frames);
+        return {};
+    }
+
     // What a reader relies on: five named audio tracks in order, equally long, and a3t.json.
-    juce::String verify (const juce::File& file, juce::int64 frames)
+    juce::String verify (const juce::File& file, juce::int64 frames, const std::optional<juce::String>& copiedCodec)
     {
         const auto format = av::openFormat (file);
         if (format == nullptr)
@@ -286,11 +372,16 @@ namespace
                 return error;
         if (const auto error = checkJson (json); error.isNotEmpty())
             return error;
-        for (int i = 0; i < numTracks; ++i)
-            if (const auto counted = countFrames (file, i); counted != frames)
-                return trackNames[(size_t) i] + " was written " + juce::String (counted.value_or (-1))
-                       + " frames long, not " + juce::String (frames);
-        return {};
+        return checkLengths (file, frames, copiedCodec);
+    }
+
+    // Keep mode copies the original's packets; a gapless lossy original would come out longer.
+    juce::String checkOriginalCopy (const Input& original, juce::int64 frames)
+    {
+        if (! testing::refuseLossyCopyUpFront)
+            return {};
+        const auto lost = startTrimLostByCopy (original.file);
+        return lost > 0 ? lossyCopyAdvice (original.info.codecName, frames + lost, frames) : juce::String();
     }
 
     juce::String checkRequest (const WriteRequest& request)
@@ -313,12 +404,21 @@ WriteResult writeTrack (const WriteRequest& request)
 {
     if (const auto error = checkRequest (request); error.isNotEmpty())
         return failure (error);
+    // First, so that it is cleaned up whatever fails after it.
+    TemporaryFile temporary (request.output);
+    if (! temporary.exists())
+        return failure ("cannot create a temporary file beside " + request.output.getFullPathName() + ": "
+                        + juce::String (std::strerror (errno)));
+
     Inputs inputs;
     if (const auto error = readInputs (request, inputs); error.isNotEmpty())
         return failure (error);
     juce::int64 frames = 0;
     if (const auto error = commonLength (inputs, request.convert, frames); error.isNotEmpty())
         return failure (error);
+    if (request.convert.keep)
+        if (const auto error = checkOriginalCopy (inputs[0], frames); error.isNotEmpty())
+            return failure (error);
     std::optional<Cover> cover;
     if (const auto error = loadCover (request.cover, cover); error.isNotEmpty())
         return failure (error);
@@ -329,15 +429,14 @@ WriteResult writeTrack (const WriteRequest& request)
     const auto rate = request.convert.keep ? inputs[0].info.sampleRate : request.convert.sampleRate;
     const auto data = withFileFacts (request.data, inputs[0]);
 
-    const TemporaryFile temporary (juce::File (request.output.getFullPathName() + ".tmp"));
-    if (const auto error = writeFile (temporary.file, sources, data, cover, (double) frames / rate);
+    if (const auto error = writeFile (temporary.path(), sources, data, cover, (double) frames / rate);
         error.isNotEmpty())
         return failure (error);
-    if (const auto error = verify (temporary.file, frames); error.isNotEmpty())
+    const auto copiedCodec = request.convert.keep ? std::optional<juce::String> (inputs[0].info.codecName) : std::nullopt;
+    if (const auto error = verify (temporary.path(), frames, copiedCodec); error.isNotEmpty())
         return failure ("verification failed: " + error);
-    // rename(2) replaces the target in one step; JUCE's moveFileTo deletes it first.
-    if (std::rename (temporary.file.getFullPathName().toRawUTF8(), request.output.getFullPathName().toRawUTF8()) != 0)
-        return failure ("cannot rename into place: " + juce::String (std::strerror (errno)));
+    if (const auto error = temporary.moveTo (request.output); error.isNotEmpty())
+        return failure (error);
     return { true, {} };
 }
 }

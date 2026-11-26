@@ -7,6 +7,7 @@
 extern "C"
 {
 #include <libavutil/audio_fifo.h>
+#include <libavutil/intreadwrite.h>
 }
 
 #include <algorithm>
@@ -51,7 +52,8 @@ namespace
 
         bool next (AVPacket& out) override
         {
-            for (int result; (result = av_read_frame (format.get(), packet.get())) >= 0;)
+            int result = 0;
+            while ((result = av_read_frame (format.get(), packet.get())) >= 0)
             {
                 if (packet->stream_index != index)
                 {
@@ -62,6 +64,7 @@ namespace
                 stamp (out);
                 return true;
             }
+            broken = result != AVERROR_EOF;
             return false;
         }
 
@@ -309,5 +312,32 @@ bool hasMillisecondFlacBlocks (const juce::File& file)
         return false;
     const auto [smallest, largest] = blockSizesOf (parameters);
     return smallest == largest && largest > 0 && (juce::int64) largest * 1000 % parameters.sample_rate == 0;
+}
+
+juce::int64 startTrimLostByCopy (const juce::File& file)
+{
+    // The skip sits on the first packet or two; a handful is plenty.
+    constexpr int packetsToLookAt = 16;
+    const auto format = av::openFormat (file);
+    if (format == nullptr)
+        return 0;
+    const auto index = av::audioStreamIndex (*format, 0);
+    if (index < 0)
+        return 0;
+    av::Packet packet { av_packet_alloc() };
+    juce::int64 skipped = 0;
+    for (int seen = 0; seen < packetsToLookAt && av_read_frame (format.get(), packet.get()) >= 0;)
+    {
+        if (packet->stream_index == index)
+        {
+            size_t size = 0;
+            const auto* skip = av_packet_get_side_data (packet.get(), AV_PKT_DATA_SKIP_SAMPLES, &size);
+            if (skip != nullptr && size >= 4)
+                skipped += AV_RL32 (skip);
+            ++seen;
+        }
+        av_packet_unref (packet.get());
+    }
+    return std::max<juce::int64> (skipped - format->streams[index]->codecpar->initial_padding, 0);
 }
 }

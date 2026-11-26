@@ -4,6 +4,7 @@
 #include "a3t/Json.h"
 #include "a3t/Writer.h"
 #include "AvPtr.h"
+#include "WriterTesting.h"
 #include "TestAudio.h"
 
 #include <gtest/gtest.h>
@@ -30,9 +31,10 @@ namespace
         return r;
     }
 
-    juce::File tmpOf (const juce::File& output)
+    // The writer's temporary files are <output>.<random>.a3tmp beside the output.
+    bool noTemporaryIn (const juce::File& dir)
     {
-        return juce::File (output.getFullPathName() + ".tmp");
+        return dir.findChildFiles (juce::File::findFiles, false, "*.a3tmp").isEmpty();
     }
 
     Channels decodeAll (const juce::File& file, int track)
@@ -141,30 +143,40 @@ namespace
         return c;
     }
 
-    // A stereo 24-bit FLAC written straight through libav at compression level 0, which the writer's
-    // encoder (default level) never produces: packets equal to these were copied, not re-encoded.
-    juce::File writeTestFlac (const juce::File& dir, const juce::String& name, int rate, juce::int64 frames,
-                              int blockSize)
+    // The 330 Hz test sine into an interleaved S32 or S16, or a planar float, stereo frame.
+    void fillSine (AVFrame& frame, juce::int64 position)
     {
-        const auto file = dir.getChildFile (name);
-        const auto path = file.getFullPathName().toStdString();
-        const auto* codec = avcodec_find_encoder (AV_CODEC_ID_FLAC);
-        av::Codec encoder { avcodec_alloc_context3 (codec) };
-        encoder->sample_fmt = AV_SAMPLE_FMT_S32;
-        encoder->bits_per_raw_sample = 24;
-        encoder->sample_rate = rate;
-        encoder->time_base = { 1, rate };
-        encoder->frame_size = blockSize;
-        encoder->compression_level = 0;
-        av_channel_layout_default (&encoder->ch_layout, 2);
-        if (avcodec_open2 (encoder.get(), codec, nullptr) < 0)
-            return {};
+        for (int i = 0; i < frame.nb_samples; ++i)
+        {
+            const auto phase = 2.0 * juce::MathConstants<double>::pi * 330.0 * (double) (position + i) / frame.sample_rate;
+            const auto value = 0.5 * std::sin (phase);
+            if (frame.format == AV_SAMPLE_FMT_S32)
+            {
+                auto* samples = reinterpret_cast<int32_t*> (frame.data[0]);
+                samples[2 * i] = samples[2 * i + 1] = (int32_t) std::lround (value * 8388607.0) * 256;
+                continue;
+            }
+            if (frame.format == AV_SAMPLE_FMT_S16)
+            {
+                auto* samples = reinterpret_cast<int16_t*> (frame.data[0]);
+                samples[2 * i] = samples[2 * i + 1] = (int16_t) std::lround (value * 32767.0);
+                continue;
+            }
+            for (int c = 0; c < 2; ++c)
+                reinterpret_cast<float*> (frame.data[c])[i] = (float) value;
+        }
+    }
 
+    // A stereo sine encoded straight through libav with an opened encoder into `muxer`'s format.
+    juce::File encodeSine (const juce::File& file, const char* muxer, AVCodecContext& encoder, juce::int64 frames)
+    {
+        const auto path = file.getFullPathName().toStdString();
         AVFormatContext* out = nullptr;
-        avformat_alloc_output_context2 (&out, nullptr, "flac", path.c_str());
+        if (avformat_alloc_output_context2 (&out, nullptr, muxer, path.c_str()) < 0)
+            return {};
         auto* stream = avformat_new_stream (out, nullptr);
-        avcodec_parameters_from_context (stream->codecpar, encoder.get());
-        stream->time_base = encoder->time_base;
+        avcodec_parameters_from_context (stream->codecpar, &encoder);
+        stream->time_base = encoder.time_base;
         if (avio_open (&out->pb, path.c_str(), AVIO_FLAG_WRITE) < 0 || avformat_write_header (out, nullptr) < 0)
         {
             avio_closep (&out->pb);
@@ -176,37 +188,69 @@ namespace
         av::Packet packet { av_packet_alloc() };
         const auto drain = [&]
         {
-            while (avcodec_receive_packet (encoder.get(), packet.get()) >= 0)
+            while (avcodec_receive_packet (&encoder, packet.get()) >= 0)
             {
-                av_packet_rescale_ts (packet.get(), encoder->time_base, stream->time_base);
+                av_packet_rescale_ts (packet.get(), encoder.time_base, stream->time_base);
                 av_interleaved_write_frame (out, packet.get());
             }
         };
+        const auto blockSize = encoder.frame_size;
         for (juce::int64 position = 0; position < frames; position += blockSize)
         {
-            const auto count = (int) std::min<juce::int64> (blockSize, frames - position);
             av_frame_unref (frame.get());
-            frame->nb_samples = count;
-            frame->format = AV_SAMPLE_FMT_S32;
-            frame->sample_rate = rate;
+            frame->nb_samples = (int) std::min<juce::int64> (blockSize, frames - position);
+            frame->format = encoder.sample_fmt;
+            frame->sample_rate = encoder.sample_rate;
             frame->pts = position;
-            av_channel_layout_copy (&frame->ch_layout, &encoder->ch_layout);
+            av_channel_layout_copy (&frame->ch_layout, &encoder.ch_layout);
             av_frame_get_buffer (frame.get(), 0);
-            auto* samples = reinterpret_cast<int32_t*> (frame->data[0]);
-            for (int i = 0; i < count; ++i)
-            {
-                const auto phase = 2.0 * juce::MathConstants<double>::pi * 330.0 * (double) (position + i) / rate;
-                samples[2 * i] = samples[2 * i + 1] = (int32_t) std::lround (0.5 * std::sin (phase) * 8388607.0) * 256;
-            }
-            avcodec_send_frame (encoder.get(), frame.get());
+            fillSine (*frame, position);
+            avcodec_send_frame (&encoder, frame.get());
             drain();
         }
-        avcodec_send_frame (encoder.get(), nullptr);
+        avcodec_send_frame (&encoder, nullptr);
         drain();
         av_write_trailer (out);
         avio_closep (&out->pb);
         avformat_free_context (out);
         return file;
+    }
+
+    // A stereo 24-bit FLAC at compression level 0, which the writer's encoder (default level) never
+    // produces: packets equal to these were copied, not re-encoded.
+    juce::File writeTestFlac (const juce::File& dir, const juce::String& name, int rate, juce::int64 frames,
+                              int blockSize)
+    {
+        const auto* codec = avcodec_find_encoder (AV_CODEC_ID_FLAC);
+        av::Codec encoder { avcodec_alloc_context3 (codec) };
+        encoder->sample_fmt = AV_SAMPLE_FMT_S32;
+        encoder->bits_per_raw_sample = 24;
+        encoder->sample_rate = rate;
+        encoder->time_base = { 1, rate };
+        encoder->frame_size = blockSize;
+        encoder->compression_level = 0;
+        av_channel_layout_default (&encoder->ch_layout, 2);
+        if (avcodec_open2 (encoder.get(), codec, nullptr) < 0)
+            return {};
+        return encodeSine (dir.getChildFile (name), "flac", *encoder, frames);
+    }
+
+    // A stereo MP3 through libmp3lame, whose muxer writes the LAME header with the encoder delay and
+    // padding (gapless); an invalid File when no such encoder is built in.
+    juce::File writeTestMp3 (const juce::File& dir, const juce::String& name, int rate, juce::int64 frames)
+    {
+        const auto* codec = avcodec_find_encoder_by_name ("libmp3lame");
+        if (codec == nullptr)
+            return {};
+        av::Codec encoder { avcodec_alloc_context3 (codec) };
+        encoder->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        encoder->sample_rate = rate;
+        encoder->time_base = { 1, rate };
+        encoder->bit_rate = 192000;
+        av_channel_layout_default (&encoder->ch_layout, 2);
+        if (avcodec_open2 (encoder.get(), codec, nullptr) < 0)
+            return {};
+        return encodeSine (dir.getChildFile (name), "mp3", *encoder, frames);
     }
 
     constexpr unsigned char tinyPng[] = {
@@ -295,7 +339,7 @@ TEST (Writer, UnequalLengthsAreRefusedAndNothingIsWritten)
     EXPECT_TRUE (result.error.contains ("10000")) << result.error;
     EXPECT_TRUE (result.error.contains ("10007")) << result.error;
     EXPECT_FALSE (r.output.exists());
-    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
 TEST (Writer, DifferentRatesAreRefusedWhenKeeping)
@@ -320,17 +364,34 @@ TEST (Writer, AFailingVerifyLeavesTheOldFileUntouched)
     EXPECT_FALSE (result.ok);
     EXPECT_FALSE (result.error.isEmpty());
     EXPECT_EQ (bytesOf (r.output), before);
-    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
-TEST (Writer, AStaleTmpIsReplacedAndRemoved)
+// "<output>.tmp" may be the user's own file: the writer never touches it.
+TEST (Writer, AnOwnTmpBesideTheOutputIsUntouched)
 {
     TempDir t;
-    const auto r = requestFor (t, 44100, 16, 10000);
-    tmpOf (r.output).replaceWithText ("left over from a crash");
+    auto r = requestFor (t, 44100, 16, 10000, 2, "song");
+    const auto own = t.dir.getChildFile ("song.tmp");
+    own.replaceWithText ("the user's own file");
     ASSERT_TRUE (writeTrack (r).ok);
-    EXPECT_FALSE (tmpOf (r.output).exists());
-    EXPECT_EQ (audioStreamsOf (r.output).size(), 5u);
+    EXPECT_EQ (own.loadFileAsString(), "the user's own file");
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+
+    r.stems[1] = t.dir.getChildFile ("missing.wav");
+    EXPECT_FALSE (writeTrack (r).ok);
+    EXPECT_EQ (own.loadFileAsString(), "the user's own file");
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+}
+
+TEST (Writer, AFailureAtTheFirstStepLeavesNoTemporary)
+{
+    TempDir t;
+    auto r = requestFor (t, 44100, 16, 10000);
+    r.original = t.dir.getChildFile ("missing.wav");
+    EXPECT_FALSE (writeTrack (r).ok);
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+    EXPECT_FALSE (r.output.exists());
 }
 
 // The file is complete and verified, and the last step still fails: the temporary file goes too.
@@ -345,7 +406,7 @@ TEST (Writer, AFailedRenameRemovesTheTmp)
     EXPECT_FALSE (result.ok);
     EXPECT_TRUE (result.error.contains ("rename")) << result.error;
     EXPECT_TRUE (r.output.getChildFile ("inside").existsAsFile());
-    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
 TEST (Writer, A3tJsonIsAnAttachmentAndParses)
@@ -376,6 +437,7 @@ TEST (Writer, A3tJsonIsAnAttachmentAndParses)
 
     auto expected = r.data;
     expected.uuid = loaded.data.uuid;
+    EXPECT_EQ (audio.source, "original.wav");
     expected.track.audio = audio;
     EXPECT_TRUE (loaded.data == expected);
 }
@@ -446,7 +508,7 @@ TEST (Writer, OddOutputNamesWork)
     ASSERT_TRUE (result.ok) << result.error;
     EXPECT_TRUE (r.output.existsAsFile());
     EXPECT_EQ (audioStreamsOf (r.output).size(), 5u);
-    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
 TEST (Writer, CoverIsAnAttachment)
@@ -473,7 +535,7 @@ TEST (Writer, ACoverThatIsNoImageIsRefused)
     r.cover.replaceWithText ("not a picture");
     EXPECT_FALSE (writeTrack (r).ok);
     EXPECT_FALSE (r.output.exists());
-    EXPECT_FALSE (tmpOf (r.output).exists());
+    EXPECT_TRUE (noTemporaryIn (t.dir));
 }
 
 // Stems are what StemDeck seeks in; FLAC in Matroska must land on the exact sample.
@@ -535,4 +597,78 @@ TEST (Writer, AFlacStemWithOtherBlocksIsReEncoded)
     ASSERT_TRUE (result.ok) << result.error;
     EXPECT_NE (packetsOf (r.output, 1, 5), packetsOf (r.stems[0], 0, 5));
     EXPECT_EQ (decodeAll (r.output, 1), decodeAll (r.stems[0], 0));
+}
+
+// The encoder delay and padding of a gapless MP3 cannot be copied into Matroska: the copied original
+// would be longer than the stems. Refused, with advice to convert; conversion trims it and works.
+TEST (Writer, AGaplessMp3OriginalIsRefusedWhenKeeping)
+{
+    TempDir t;
+    const auto mp3 = writeTestMp3 (t.dir, "original.mp3", 44100, 88200);
+    if (mp3 == juce::File())
+        GTEST_SKIP() << "no libmp3lame encoder in this FFmpeg build";
+    const auto frames = countFrames (mp3);
+    ASSERT_TRUE (frames.has_value());
+    auto r = requestFor (t, 44100, 16, *frames);
+    r.original = mp3;
+    r.output.replaceWithText ("the old file");
+    const auto before = bytesOf (r.output);
+
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.contains ("conversion")) << result.error;
+    EXPECT_TRUE (result.error.contains ("mp3")) << result.error;
+    EXPECT_EQ (bytesOf (r.output), before);
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+
+    r.convert = ConvertTarget::flac44k24();
+    const auto converted = writeTrack (r);
+    ASSERT_TRUE (converted.ok) << converted.error;
+    EXPECT_EQ (countFrames (r.output, 0), frames);
+}
+
+// The same file with the up-front check off: a complete temporary file reaches the verification, is
+// rejected there with the same advice, and is removed; the old target keeps its bytes.
+TEST (Writer, VerificationRejectsACompleteFileAndGivesTheSameAdvice)
+{
+    TempDir t;
+    const auto mp3 = writeTestMp3 (t.dir, "original.mp3", 44100, 88200);
+    if (mp3 == juce::File())
+        GTEST_SKIP() << "no libmp3lame encoder in this FFmpeg build";
+    auto r = requestFor (t, 44100, 16, countFrames (mp3).value_or (0));
+    r.original = mp3;
+    r.output.replaceWithText ("the old file");
+    const auto before = bytesOf (r.output);
+
+    const a3t::testing::UpFrontLossyCheckOff off;
+    const auto result = writeTrack (r);
+    EXPECT_FALSE (result.ok);
+    EXPECT_TRUE (result.error.startsWith ("verification failed")) << result.error;
+    EXPECT_TRUE (result.error.contains ("conversion")) << result.error;
+    EXPECT_EQ (bytesOf (r.output), before);
+    EXPECT_TRUE (noTemporaryIn (t.dir));
+}
+
+TEST (Writer, AacAndMp2OriginalsAreStillKept)
+{
+    for (const auto* name : { "aac", "mp2" })
+    {
+        TempDir t;
+        const auto* codec = avcodec_find_encoder_by_name (name);
+        ASSERT_NE (codec, nullptr) << name;
+        av::Codec encoder { avcodec_alloc_context3 (codec) };
+        encoder->sample_fmt = codec->id == AV_CODEC_ID_AAC ? AV_SAMPLE_FMT_FLTP : AV_SAMPLE_FMT_S16;
+        encoder->sample_rate = 44100;
+        encoder->time_base = { 1, 44100 };
+        encoder->bit_rate = 192000;
+        av_channel_layout_default (&encoder->ch_layout, 2);
+        ASSERT_GE (avcodec_open2 (encoder.get(), codec, nullptr), 0) << name;
+        const auto original = encodeSine (t.dir.getChildFile (juce::String ("original.") + (codec->id == AV_CODEC_ID_AAC ? "m4a" : "mp2")),
+                                          codec->id == AV_CODEC_ID_AAC ? "ipod" : "mp2", *encoder, 88200);
+        ASSERT_NE (original, juce::File()) << name;
+        auto r = requestFor (t, 44100, 16, countFrames (original).value_or (0));
+        r.original = original;
+        const auto result = writeTrack (r);
+        EXPECT_TRUE (result.ok) << name << ": " << result.error;
+    }
 }
