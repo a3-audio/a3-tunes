@@ -43,3 +43,17 @@ TEST (Bench, EmptyInputGivesZeros)
     EXPECT_DOUBLE_EQ (s.p95, 0.0);
     EXPECT_DOUBLE_EQ (s.max, 0.0);
 }
+
+// The 95th percentile is the value at rank ceil(0.95 n), also when 0.95 n is not whole.
+TEST (Bench, P95OfANonMultipleCountIsTheCeilingRank)
+{
+    const auto oneTo = [] (int n)
+    {
+        std::vector<double> v;
+        for (int i = n; i >= 1; --i)
+            v.push_back (i);
+        return summarise (v);
+    };
+    EXPECT_DOUBLE_EQ (oneTo (10).p95, 10.0);
+    EXPECT_DOUBLE_EQ (oneTo (21).p95, 20.0);
+}

@@ -27,14 +27,17 @@ build/bin/a3t ...         # the CLI
 a3t build --original o.flac --stem1 s1.flac --stem2 s2.flac --stem3 s3.flac --stem4 s4.flac \
           --out song.a3mkv [--meta meta.json] [--cover c.jpg] [--convert 44100/24]
 a3t info song.a3mkv                      # a3t.json (sidecar applied), status, tracks, rate, frames
-a3t verify song.a3mkv                    # five tracks, all the same exact length
+a3t verify song.a3mkv                    # the writer's checks: names, FLAC stems, exact lengths, a3t.json
 a3t merge song.a3mkv --list              # what the rig changed in the sidecar
-a3t merge song.a3mkv --take all          # take it into the file (or none / KEY,KEY)
+a3t merge song.a3mkv --take all          # take it into the file (or none / KEY,KEY); removes the sidecar
 a3t seekbench song.a3mkv --seeks 100 --compare DIR   # hot-cue seek timing; DIR has stem1..4.flac
 ```
 
 Exit codes: 0 ok, 1 usage error, 2 failure. Data goes to stdout, reasons to stderr.
 `seekbench` draws its random positions from a fixed seed (1), so runs are comparable.
+Its "bytes read per second of audio" is the process's `rchar` (from `/proc/self/io`, so page-cache
+hits count too) divided by the seconds stem 1 read; the four stems are read together, so it is bytes
+per second of music. The loose files given with `--compare` must share sample rate and channel count.
 
 ## File layout
 

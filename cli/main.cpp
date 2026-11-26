@@ -457,26 +457,40 @@ namespace
         return rchar;
     }
 
-    // Reads up to one second; false when the decoder failed.
-    bool readOneSecond (a3t::TrackDecoder& decoder, juce::int64& framesRead)
+    constexpr int blockFrames = 4096;
+
+    // One decoder's read buffer, made before the clock starts so allocation is not timed.
+    struct Planes
     {
-        std::vector<std::vector<float>> block ((size_t) decoder.channels(), std::vector<float> (4096));
-        std::vector<float*> planes;
-        for (auto& plane : block)
-            planes.push_back (plane.data());
+        explicit Planes (int channels) : block ((size_t) channels, std::vector<float> (blockFrames))
+        {
+            for (auto& plane : block)
+                pointers.push_back (plane.data());
+        }
+        std::vector<std::vector<float>> block;
+        std::vector<float*> pointers;
+    };
+
+    // Reads up to one second; false when the decoder failed.
+    bool readOneSecond (a3t::TrackDecoder& decoder, Planes& planes, juce::int64& framesRead)
+    {
         framesRead = 0;
-        for (int n; framesRead < decoder.sampleRate() && (n = decoder.read (planes.data(), 4096)) > 0;)
+        for (int n; framesRead < decoder.sampleRate() && (n = decoder.read (planes.pointers.data(), blockFrames)) > 0;)
             framesRead += n;
         return ! decoder.failed();
     }
 
     // What StemDeck does on a hot cue: all stems seek to one frame, then read one second.
-    // The bytes figure is bytes read per second of music (the stems are read together).
+    // The bytes figure is the process's rchar (cache hits count) over the seconds stem 1 read:
+    // bytes per second of music, the stems being read together.
     bool measureSeeks (Decoders& decoders, juce::int64 lengthFrames, int seeks, SeekRun& run, juce::String& error)
     {
         std::mt19937_64 random (randomSeed);
         const auto rate = decoders.front()->sampleRate();
         std::uniform_int_distribution<juce::int64> pick (0, std::max<juce::int64> (0, lengthFrames - rate));
+        std::vector<Planes> buffers;
+        for (const auto& decoder : decoders)
+            buffers.emplace_back (decoder->channels());
         const auto bytesBefore = bytesReadByProcess();
         double audioSeconds = 0.0;
         for (int i = 0; i < seeks; ++i)
@@ -484,15 +498,15 @@ namespace
             const auto frame = pick (random);
             const auto start = std::chrono::steady_clock::now();
             juce::int64 firstStemFrames = 0;
-            for (auto& decoder : decoders)
+            for (size_t d = 0; d < decoders.size(); ++d)
             {
                 juce::int64 framesRead = 0;
-                if (! decoder->seek (frame) || ! readOneSecond (*decoder, framesRead))
+                if (! decoders[d]->seek (frame) || ! readOneSecond (*decoders[d], buffers[d], framesRead))
                 {
                     error = "seeking to frame " + juce::String (frame) + " failed";
                     return false;
                 }
-                if (&decoder == &decoders.front())
+                if (d == 0)
                     firstStemFrames = framesRead;
             }
             const std::chrono::duration<double, std::milli> took = std::chrono::steady_clock::now() - start;
@@ -553,6 +567,16 @@ namespace
                 return exitFailure;
             }
             length = std::min (length, decoders.back()->lengthFrames());
+            const auto& first = *decoders.front();
+            const auto& last = *decoders.back();
+            if (last.sampleRate() != first.sampleRate() || last.channels() != first.channels())
+            {
+                // One seek frame is used for all four, which only means the same moment at one format.
+                error = stemFile.getFullPathName() + " is " + juce::String (last.sampleRate()) + " Hz, "
+                        + juce::String (last.channels()) + " channels; stem1.flac is "
+                        + juce::String (first.sampleRate()) + " Hz, " + juce::String (first.channels()) + " channels";
+                return exitFailure;
+            }
         }
         return measureSeeks (decoders, length, seeks, run, error) ? exitOk : exitFailure;
     }
